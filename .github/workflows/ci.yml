@@ -34,10 +34,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
+      - uses: actions/checkout@v7
       - name: Check the tree is publishable
         run: python3 tools/check_repo.py --verbose
 
@@ -47,12 +44,12 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout OncoPattern
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           path: OncoPattern
 
       - name: Checkout the TECH toolchain
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: esskslifetech/TECH
           path: TECH
@@ -82,14 +79,16 @@ jobs:
           TECH_ROOT: ${{ github.workspace }}/TECH
         run: tools/ocbuild run config/boot.tech oncopattern
 
+      # `working-directory` only applies to `run` steps, so the paths here are
+      # relative to the workspace root, not to the checked-out project
       - name: Keep the run summary
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: oc-run-summary
           path: |
-            results/run_summary.txt
-            results/report_t0.txt
-            results/report_compare.txt
-            results/figures.svg
+            OncoPattern/results/run_summary.txt
+            OncoPattern/results/report_t0.txt
+            OncoPattern/results/report_compare.txt
+            OncoPattern/results/figures.svg
           if-no-files-found: error
           retention-days: 14
