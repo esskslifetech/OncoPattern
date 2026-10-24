@@ -57,6 +57,15 @@ jobs:
           repository: esskslifetech/TECH
           path: TECH
 
+      # TECH ships its VM and native backend, but the C seed compiler
+      # (bootstrap/stage0/stage0) is a build product, so a fresh clone has to
+      # build once before techc can compile anything.
+      - name: Build the toolchain
+        working-directory: TECH
+        run: |
+          chmod +x tech techc
+          make build
+
       - name: Run every certificate
         working-directory: OncoPattern
         env:

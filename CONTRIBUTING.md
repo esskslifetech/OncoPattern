@@ -26,6 +26,7 @@ and `./TECH`.
 git clone https://github.com/esskslifetech/OncoPattern
 git clone https://github.com/esskslifetech/TECH        # sibling checkout
 cd OncoPattern
+make -C ../TECH build                                  # C stage0 tools, once
 tools/runtests                                         # 9 certificates
 tools/ocbuild run config/boot.tech oncopattern         # full pipeline
 ```

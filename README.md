@@ -37,10 +37,16 @@ git clone https://github.com/esskslifetech/OncoPattern
 git clone https://github.com/esskslifetech/TECH
 cd OncoPattern
 
+make -C ../TECH build   # the C stage0 tools; once per TECH checkout
 make check    # publishability checks — needs no toolchain
 make test     # the same, then 453 assertions across nine certificates
 make run      # the full pipeline: two timepoints, ~8 s
 ```
+
+TECH ships its VM and native backend, but the C seed compiler
+(`bootstrap/stage0/stage0`) is a build product, so the toolchain has to be built
+once before `techc` can compile anything. On macOS and Linux that needs a C
+compiler; on Windows use WSL.
 
 `make package` produces the self-contained `dist/oncopattern.bin`, `make vm`
 runs the same program on the self-hosted `vm.tech`, and `make datasets`
