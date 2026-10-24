@@ -1,0 +1,370 @@
+# ============================================================================
+# oncopattern/gui/window.tech — the framebuffer window manager.
+#
+# Composes the whole interface described in plan §6.1:
+#
+#   +------------------------------------------------------------+
+#   |  Menu Bar  [File] [Data] [Sim] [View] [Help]                |
+#   +-----------+------------------------------------------------+
+#   |  Panel    |   Main Canvas                                   |
+#   |  Tree     |   (heatmap / graph / timeseries / spatial)      |
+#   |  - Data   |                                                 |
+#   |  - Pat.   |                                                 |
+#   |  - Sim    |                                                 |
+#   +-----------+------------------------------------------------+
+#   |  Status Bar  [pattern count] [sim status]                   |
+#   +------------------------------------------------------------+
+#
+# The frame is rendered into the RGB framebuffer; on the machine model the
+# same content is mirrored to the VGA text buffer at 0xB8000 through poke(),
+# which is how a TECH OS build of this program would drive a real screen.
+#
+# META @module(name:gui_window, provides:win_*, requires:gui_dialogs,vis_*)
+# ============================================================================
+
+IMPORT oncopattern/gui/dialogs
+IMPORT oncopattern/gui/layout
+IMPORT oncopattern/visualization/heatmap
+IMPORT oncopattern/visualization/graph_view
+IMPORT oncopattern/visualization/timeseries
+IMPORT oncopattern/visualization/spatial
+IMPORT oncopattern/visualization/pattern_overlay
+IMPORT oncopattern/pattern/log
+# the sidebar reports the signal sweep, so the scanner has to be declared
+# before this module: the compiler is single-pass, and a global referenced
+# ahead of its DECL silently binds to a fresh, uninitialised symbol.
+IMPORT oncopattern/pattern/novel
+
+DECL VIEW_HEATMAP : int<64> = 0
+DECL VIEW_GRAPH   : int<64> = 1
+DECL VIEW_TIMESER : int<64> = 2
+DECL VIEW_SPATIAL : int<64> = 3
+
+DECL win_view    : int<64> = 0
+DECL win_field   : int<64> = 0        # which spatial field is showing
+DECL win_status  : buf<256> = null
+DECL win_status_n : int<64> = 0
+DECL win_patient : buf<32> = null
+DECL win_patient_n : int<64> = 0
+DECL win_tab0    : int<64> = -1       # widget ids of the four tabs
+DECL win_frames  : int<64> = 0
+DECL VGA_BASE    : int<64> = 753664   # 0xB8000
+
+# action ids
+DECL ACT_OPEN    : int<64> = 1
+DECL ACT_RUN     : int<64> = 2
+DECL ACT_REPORT  : int<64> = 3
+DECL ACT_EXPORT  : int<64> = 4
+DECL ACT_ABOUT   : int<64> = 5
+DECL ACT_TAB     : int<64> = 10
+DECL ACT_QUIT    : int<64> = 99
+
+FUNC win_set_status(s : buf<>) {
+    win_status_n = 0
+    win_status_n = oc_cat(win_status, win_status_n, s)
+}
+
+FUNC win_set_patient(s : buf<>) {
+    win_patient_n = 0
+    win_patient_n = oc_cat(win_patient, win_patient_n, s)
+}
+
+# ---------------------------------------------------------------------------
+# build the widget tree (called once; the layout is static)
+# ---------------------------------------------------------------------------
+FUNC win_build() : int<64> {
+    widget_reset()
+    lay_reset()
+    # ---- menu bar buttons
+    DECL mx : int<64> = 4
+    widget_add(W_BUTTON, mx, 2, 52, 18, strbuf("FILE"), ACT_OPEN)
+    mx = mx + 54
+    widget_add(W_BUTTON, mx, 2, 52, 18, strbuf("DATA"), ACT_OPEN)
+    mx = mx + 54
+    widget_add(W_BUTTON, mx, 2, 52, 18, strbuf("SIM"), ACT_RUN)
+    mx = mx + 54
+    widget_add(W_BUTTON, mx, 2, 52, 18, strbuf("VIEW"), ACT_TAB)
+    mx = mx + 54
+    widget_add(W_BUTTON, mx, 2, 52, 18, strbuf("HELP"), ACT_ABOUT)
+
+    # ---- side panel actions
+    DECL sy : int<64> = TH_MENUH + 294
+    widget_add(W_BUTTON, 8, sy, TH_SIDEW - 16, 20, strbuf("RUN PIPELINE"), ACT_RUN)
+    widget_add(W_BUTTON, 8, sy + 26, TH_SIDEW - 16, 20, strbuf("GENERATE REPORT"), ACT_REPORT)
+    widget_add(W_BUTTON, 8, sy + 52, TH_SIDEW - 16, 20, strbuf("EXPORT BMP + SVG"), ACT_EXPORT)
+
+    # ---- canvas tabs
+    DECL tx : int<64> = TH_SIDEW + 4
+    DECL tw : int<64> = 116
+    win_tab0 = widget_add(W_TAB, tx, TH_MENUH + 2, tw, TH_TABH, strbuf("HEATMAP"), ACT_TAB)
+    widget_add(W_TAB, tx + tw + 2, TH_MENUH + 2, tw, TH_TABH, strbuf("GRAPH"), ACT_TAB + 1)
+    widget_add(W_TAB, tx + (tw + 2) * 2, TH_MENUH + 2, tw, TH_TABH, strbuf("TIMESERIES"), ACT_TAB + 2)
+    widget_add(W_TAB, tx + (tw + 2) * 3, TH_MENUH + 2, tw, TH_TABH, strbuf("SPATIAL"), ACT_TAB + 3)
+    wg_state[win_tab0] = S_ACTIVE
+    RETURN wg_n
+}
+
+# ---------------------------------------------------------------------------
+# chrome
+# ---------------------------------------------------------------------------
+FUNC win_draw_menubar() {
+    fb_rect(0, 0, FB_W, TH_MENUH, TH_BAR_R, TH_BAR_G, TH_BAR_B)
+    fb_rect(0, TH_MENUH - 1, FB_W, 1, TH_EDGE_R, TH_EDGE_G, TH_EDGE_B)
+    DECL t : buf<> = strbuf("ONCOPATTERN")
+    DECL c : buf<> = strbuf("ESS KS LIFE TECH")
+    fb_text(FB_W - fb_text_w(t, 1) - 10, 8, t, 1, TH_ACC_R, TH_ACC_G, TH_ACC_B)
+    fb_text(FB_W - fb_text_w(t, 1) - fb_text_w(c, 1) - 22, 8, c, 1, TH_DIM_R, TH_DIM_G, TH_DIM_B)
+}
+
+FUNC win_draw_sidebar() {
+    DECL y : int<64> = TH_MENUH
+    DECL h : int<64> = FB_H - TH_MENUH - TH_STATUSH
+    fb_rect(0, y, TH_SIDEW, h, TH_PANEL_R, TH_PANEL_G, TH_PANEL_B)
+    fb_rect(TH_SIDEW - 1, y, 1, h, TH_EDGE_R, TH_EDGE_G, TH_EDGE_B)
+
+    DECL ty : int<64> = y + 8
+    fb_text(8, ty, strbuf("PATIENT"), 1, TH_DIM_R, TH_DIM_G, TH_DIM_B)
+    fb_text(8, ty + 12, slice(win_patient, 0, win_patient_n), 1, TH_TEXT_R, TH_TEXT_G, TH_TEXT_B)
+
+    # --- DATA node
+    ty = ty + 32
+    fb_text(8, ty, strbuf("- DATA"), 1, TH_ACC_R, TH_ACC_G, TH_ACC_B)
+    ty = ty + 12
+    DECL s1 : int<64> = 0
+    fb_text(18, ty, strbuf("VARIANTS"), 1, TH_DIM_R, TH_DIM_G, TH_DIM_B)
+    fb_text(112, ty, oc_itoa(g_var_n), 1, TH_TEXT_R, TH_TEXT_G, TH_TEXT_B)
+    ty = ty + 11
+    fb_text(18, ty, strbuf("GENES"), 1, TH_DIM_R, TH_DIM_G, TH_DIM_B)
+    fb_text(112, ty, oc_itoa(g_expr_g), 1, TH_TEXT_R, TH_TEXT_G, TH_TEXT_B)
+    ty = ty + 11
+    fb_text(18, ty, strbuf("QUARANTINE"), 1, TH_DIM_R, TH_DIM_G, TH_DIM_B)
+    fb_text(112, ty, oc_itoa(g_quar_n), 1, TH_WARN_R, TH_WARN_G, TH_WARN_B)
+
+    # --- PATTERNS node
+    ty = ty + 20
+    fb_text(8, ty, strbuf("- PATTERNS"), 1, TH_ACC_R, TH_ACC_G, TH_ACC_B)
+    ty = ty + 12
+    fb_text(18, ty, strbuf("GENOMIC"), 1, TH_DIM_R, TH_DIM_G, TH_DIM_B)
+    fb_text(112, ty, oc_itoa(pat_count_in(CAT_GENOMIC)), 1, TH_TEXT_R, TH_TEXT_G, TH_TEXT_B)
+    ty = ty + 11
+    fb_text(18, ty, strbuf("HISTOLOGY"), 1, TH_DIM_R, TH_DIM_G, TH_DIM_B)
+    fb_text(112, ty, oc_itoa(pat_count_in(CAT_HISTOLOGICAL)), 1, TH_TEXT_R, TH_TEXT_G, TH_TEXT_B)
+    ty = ty + 11
+    fb_text(18, ty, strbuf("PHYSICAL"), 1, TH_DIM_R, TH_DIM_G, TH_DIM_B)
+    fb_text(112, ty, oc_itoa(pat_count_in(CAT_PHYSICAL)), 1, TH_TEXT_R, TH_TEXT_G, TH_TEXT_B)
+
+    # --- SIGNALS node
+    ty = ty + 20
+    fb_text(8, ty, strbuf("- SIGNALS"), 1, TH_ACC_R, TH_ACC_G, TH_ACC_B)
+    ty = ty + 12
+    fb_text(18, ty, strbuf("SCANNED"), 1, TH_DIM_R, TH_DIM_G, TH_DIM_B)
+    fb_text(112, ty, oc_itoa(sc_n), 1, TH_TEXT_R, TH_TEXT_G, TH_TEXT_B)
+    ty = ty + 11
+    fb_text(18, ty, strbuf("Z >= 2"), 1, TH_DIM_R, TH_DIM_G, TH_DIM_B)
+    fb_text(112, ty, oc_itoa(scan_significant()), 1, TH_WARN_R, TH_WARN_G, TH_WARN_B)
+    ty = ty + 11
+    fb_text(18, ty, strbuf("NOVEL"), 1, TH_DIM_R, TH_DIM_G, TH_DIM_B)
+    fb_text(112, ty, oc_itoa(nv_n), 1, TH_OK_R, TH_OK_G, TH_OK_B)
+    ty = ty + 11
+    fb_text(18, ty, strbuf("TOI"), 1, TH_DIM_R, TH_DIM_G, TH_DIM_B)
+    fb_text(50, ty, novel_toi_gene_name(), 1, TH_OK_R, TH_OK_G, TH_OK_B)
+
+    # --- SIM node
+    ty = ty + 20
+    fb_text(8, ty, strbuf("- SIMULATION"), 1, TH_ACC_R, TH_ACC_G, TH_ACC_B)
+    ty = ty + 12
+    fb_text(18, ty, strbuf("MODELS RUN"), 1, TH_DIM_R, TH_DIM_G, TH_DIM_B)
+    DECL nr : int<64> = 0
+    DECL i : int<64> = 0
+    WHILE i < SIM_N {
+        nr = nr + sim_ran[i]
+        i = i + 1
+    }
+    fb_text(112, ty, oc_itoa(nr), 1, TH_TEXT_R, TH_TEXT_G, TH_TEXT_B)
+}
+
+FUNC band_of_risk(r : float<64>) : int<64> {
+    IF r >= 80.0 {
+        RETURN 4
+    }
+    IF r >= 60.0 {
+        RETURN 3
+    }
+    IF r >= 40.0 {
+        RETURN 2
+    }
+    RETURN 1
+}
+
+# risk gauge drawn under the pattern tree
+FUNC win_draw_risk(x : int<64>, y : int<64>, w : int<64>, risk : float<64>) {
+    fb_text(x, y, strbuf("RISK INDEX"), 1, TH_DIM_R, TH_DIM_G, TH_DIM_B)
+    fb_rect(x, y + 12, w, 10, 14, 17, 23)
+    DECL fw : int<64> = (w - 2) * oc_fmin(risk / 100.0, 1.0) //// 1
+    theme_grade_color(band_of_risk(risk))
+    fb_rect(x + 1, y + 13, fw, 8, ramp_r, ramp_g, ramp_b)
+    fb_frame(x, y + 12, w, 10, TH_EDGE_R, TH_EDGE_G, TH_EDGE_B)
+    fb_text(x + w - 26, y, oc_ftoa(risk, 0), 1, TH_TEXT_R, TH_TEXT_G, TH_TEXT_B)
+}
+
+FUNC win_draw_statusbar() {
+    DECL y : int<64> = FB_H - TH_STATUSH
+    fb_rect(0, y, FB_W, TH_STATUSH, TH_BAR_R, TH_BAR_G, TH_BAR_B)
+    fb_rect(0, y, FB_W, 1, TH_EDGE_R, TH_EDGE_G, TH_EDGE_B)
+    DECL x : int<64> = 8
+    fb_text(x, y + 7, strbuf("PATTERNS"), 1, TH_DIM_R, TH_DIM_G, TH_DIM_B)
+    x = x + 58
+    fb_text(x, y + 7, oc_itoa(g_pat_n), 1, TH_ACC_R, TH_ACC_G, TH_ACC_B)
+    x = x + 30
+    fb_text(x, y + 7, strbuf("LOGGED"), 1, TH_DIM_R, TH_DIM_G, TH_DIM_B)
+    x = x + 46
+    fb_text(x, y + 7, oc_itoa(g_log_n), 1, TH_ACC_R, TH_ACC_G, TH_ACC_B)
+    x = x + 30
+    fb_text(x, y + 7, strbuf("CRITICAL"), 1, TH_DIM_R, TH_DIM_G, TH_DIM_B)
+    x = x + 58
+    fb_text(x, y + 7, oc_itoa(classify_count_grade(GRADE_CRITICAL)), 1, TH_CRIT_R, TH_CRIT_G, TH_CRIT_B)
+    fb_text(300, y + 7, slice(win_status, 0, win_status_n), 1, TH_TEXT_R, TH_TEXT_G, TH_TEXT_B)
+    DECL ft : buf<> = strbuf("FRAME")
+    fb_text(FB_W - 90, y + 7, ft, 1, TH_DIM_R, TH_DIM_G, TH_DIM_B)
+    fb_text(FB_W - 50, y + 7, oc_itoa(win_frames), 1, TH_TEXT_R, TH_TEXT_G, TH_TEXT_B)
+}
+
+# ---------------------------------------------------------------------------
+# canvas: one of the four view modes
+# ---------------------------------------------------------------------------
+FUNC win_canvas_rect() : int<64> {
+    RETURN TH_SIDEW + 4
+}
+
+# second timeseries panel (immune dynamics) — kept separate so the tab body
+# stays a flat sequence of calls
+FUNC win_draw_second_plot(x : int<64>, y : int<64>, w : int<64>, h : int<64>) {
+    ts_reset()
+    DECL s0 : int<64> = ts_series(strbuf("TUMOUR"), 255, 120, 110)
+    DECL s1 : int<64> = ts_series(strbuf("IMMUNE"), 120, 220, 255)
+    DECL i : int<64> = 0
+    WHILE i < im_len {
+        ts_push(s0, im_T[i] / 1000000.0)
+        ts_push(s1, im_I[i] / 1000000.0)
+        i = i + 4
+    }
+    ts_logy = 1
+    ts_plot(x, y, w, h, strbuf("TUMOUR-IMMUNE DYNAMICS (LOG)"), strbuf("DAYS"))
+    ts_logy = 0
+}
+
+FUNC win_draw_canvas() : int<64> {
+    DECL x : int<64> = TH_SIDEW + 4
+    DECL y : int<64> = TH_MENUH + TH_TABH + 4
+    DECL w : int<64> = FB_W - x - 6
+    DECL h : int<64> = FB_H - y - TH_STATUSH - 6
+    fb_rect(x, y, w, h, TH_PANEL_R, TH_PANEL_G, TH_PANEL_B)
+    fb_frame(x, y, w, h, TH_EDGE_R, TH_EDGE_G, TH_EDGE_B)
+
+    IF win_view == VIEW_HEATMAP {
+        heatmap_draw(x + 8, y + 8, (w - 24) //// 2, h - 16)
+        overlay_draw(x + w //// 2 + 12, y + 24, 3)
+        RETURN 1
+    }
+    IF win_view == VIEW_GRAPH {
+        graph_draw(x + 4, y + 4, w - 8, h - 8, mets_top_target(0))
+        RETURN 2
+    }
+    IF win_view == VIEW_TIMESER {
+        ts_plot(x + 4, y + 4, w - 8, (h - 12) //// 2, strbuf("TUMOUR GROWTH / DRUG RESPONSE"), strbuf("TIME"))
+        win_draw_second_plot(x + 4, y + (h - 12) //// 2 + 10, w - 8, (h - 12) //// 2)
+        RETURN 3
+    }
+    # 2 x 2 field grid: nutrient, temperature (with the 60C isocontour),
+    # vessel density and absorbed dose
+    DECL cw : int<64> = (w - 18) //// 2
+    DECL chh : int<64> = (h - 14) //// 2
+    spatial_draw(x + 6, y + 6, cw, chh, SP_NUTRIENT, 0.0)
+    spatial_draw(x + cw + 12, y + 6, cw, chh, SP_TEMP, OC_ABLATION_TEMP)
+    spatial_draw(x + 6, y + chh + 10, cw, chh, SP_VESSEL, 0.0)
+    spatial_draw(x + cw + 12, y + chh + 10, cw, chh, SP_DOSE, 0.0)
+    RETURN 4
+}
+
+# ---------------------------------------------------------------------------
+# VGA text mirror (machine model / bare metal)
+# ---------------------------------------------------------------------------
+FUNC win_vga_line(row : int<64>, s : buf<>, attr : int<64>) : int<64> {
+    DECL n : int<64> = len(s)
+    IF n > 80 {
+        n = 80
+    }
+    DECL i : int<64> = 0
+    WHILE i < n {
+        poke(VGA_BASE + (row * 80 + i) * 2, s[i] + attr * 256)
+        i = i + 1
+    }
+    RETURN n
+}
+
+FUNC win_vga_mirror() : int<64> {
+    DECL n : int<64> = 0
+    n = n + win_vga_line(0, strbuf("ONCOPATTERN  [FILE] [DATA] [SIM] [VIEW] [HELP]"), 31)
+    n = n + win_vga_line(2, slice(win_patient, 0, win_patient_n), 15)
+    n = n + win_vga_line(3, strbuf("PATTERNS DETECTED:"), 7)
+    n = n + win_vga_line(4, oc_itoa(g_pat_n), 10)
+    n = n + win_vga_line(22, strbuf("ESS KS LIFE TECH  ·  K-S (KANISHK-SONI)"), 8)
+    n = n + win_vga_line(23, slice(win_status, 0, win_status_n), 7)
+    RETURN n
+}
+
+# ---------------------------------------------------------------------------
+# one composed frame
+# ---------------------------------------------------------------------------
+FUNC win_frame(risk : float<64>) : int<64> {
+    fb_clear(TH_BG_R, TH_BG_G, TH_BG_B)
+    win_draw_menubar()
+    win_draw_sidebar()
+    win_draw_risk(8, TH_MENUH + 262, TH_SIDEW - 16, risk)
+    fb_rect(TH_SIDEW, TH_MENUH, FB_W - TH_SIDEW, TH_TABH + 4, TH_BG_R, TH_BG_G, TH_BG_B)
+    win_draw_canvas()
+    widget_draw_all()
+    win_frames = win_frames + 1
+    win_draw_statusbar()
+    dlg_draw()
+    cursor_draw()
+    RETURN win_frames
+}
+
+# switch the active view (used by the tab handler and keyboard shortcuts)
+FUNC win_set_view(v : int<64>) {
+    win_view = oc_iclamp(v, 0, 3)
+    IF win_tab0 >= 0 {
+        widget_select(win_tab0 + win_view)
+    }
+}
+
+# route an action id returned by input_dispatch
+FUNC win_handle(action : int<64>) : int<64> {
+    IF action < 0 {
+        RETURN 0
+    }
+    IF action >= ACT_TAB {
+        IF action <= ACT_TAB + 3 {
+            win_set_view(action - ACT_TAB)
+            RETURN 1
+        }
+    }
+    IF action == ACT_ABOUT {
+        dlg_open(DLG_ABOUT, strbuf("ABOUT"))
+        RETURN 1
+    }
+    IF action == ACT_OPEN {
+        dlg_open(DLG_OPEN, strbuf("OPEN DATASET"))
+        RETURN 1
+    }
+    IF action == ACT_QUIT {
+        RETURN -1
+    }
+    RETURN 1
+}
+
+# framebuffer checksum — the GUI render certificate
+FUNC win_frame_sha() : buf<> {
+    RETURN oc_hex8(slice(g_fb, 0, FB_N))
+}

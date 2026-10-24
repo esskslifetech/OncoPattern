@@ -1,0 +1,442 @@
+# ============================================================================
+# oncopattern/data/ingest_patents.tech — real patent-landscape loader.
+#
+# Parses datasets/patents.json, which tools/fetch_patents.py retrieves from the
+# European Patent Office's official Linked Open Data SPARQL endpoint
+# (data.epo.org/linked-data/query).  Three real measurements are carried:
+#
+#   genes[]      per gene of the expression panel, the number of distinct
+#                oncology-classified publications (IPC A61P35/00) whose title
+#                names that gene as a whole word
+#   classes[]    publication totals for the IPC classes that correspond to the
+#                platform's own simulation models (A61N5/10 radiotherapy,
+#                A61B18/14 RF ablation, A61K39/395 antibody immunotherapy, ...)
+#   velocity[]   publications per year in A61P35/00 — a real innovation curve
+#   applicants[] leading applicants, sampled and ranked
+#
+# The reader is a small streaming JSON scanner: it walks the byte buffer
+# looking for the next `"key":` and reads the value that follows.  That is
+# enough for this schema and avoids building a general DOM in a language with
+# no dynamic containers.
+#
+# META @module(name:ingest_patents, provides:patents_load, requires:schema)
+# ============================================================================
+
+IMPORT oncopattern/data/schema
+
+DECL PT_MAXG : int<64> = 64
+DECL PT_MAXC : int<64> = 24
+DECL PT_MAXY : int<64> = 32
+DECL PT_MAXA : int<64> = 16
+
+DECL g_pt_src        : buf<> = null
+DECL g_pt_loaded     : int<64> = 0
+
+# ---- per-gene coverage, indexed like the expression panel
+DECL g_pt_gene       : buf<64, int<64>> = null
+DECL g_pt_gene_n     : int<64> = 0
+DECL g_pt_gene_total : int<64> = 0
+DECL g_pt_gene_max   : int<64> = 0
+
+# ---- IPC classes
+DECL g_pt_cls_count  : buf<24, int<64>> = null
+DECL g_pt_cls_off    : buf<24, int<64>> = null    # code text, offset in src
+DECL g_pt_cls_len    : buf<24, int<64>> = null
+DECL g_pt_lab_off    : buf<24, int<64>> = null    # human label
+DECL g_pt_lab_len    : buf<24, int<64>> = null
+DECL g_pt_map_off    : buf<24, int<64>> = null    # which model it maps to
+DECL g_pt_map_len    : buf<24, int<64>> = null
+DECL g_pt_cls_n      : int<64> = 0
+
+# ---- publication velocity
+DECL g_pt_vel        : buf<32, int<64>> = null
+DECL g_pt_vel_n      : int<64> = 0
+DECL g_pt_year0      : int<64> = 0
+
+# ---- applicants
+DECL g_pt_app_count  : buf<16, int<64>> = null
+DECL g_pt_app_off    : buf<16, int<64>> = null
+DECL g_pt_app_len    : buf<16, int<64>> = null
+DECL g_pt_app_n      : int<64> = 0
+DECL g_pt_app_total  : int<64> = 0
+
+DECL g_pt_ret_off    : int<64> = 0                # "retrieved" date
+DECL g_pt_ret_len    : int<64> = 0
+
+# ---------------------------------------------------------------------------
+# scanner primitives
+# ---------------------------------------------------------------------------
+
+# offset of the next `"key"` at or after `from`, or -1
+FUNC pj_key(b : buf<>, from : int<64>, n : int<64>, key : buf<>) : int<64> {
+    DECL kl : int<64> = len(key)
+    DECL i : int<64> = from
+    WHILE i + kl + 2 <= n {
+        IF b[i] == 34 {
+            IF b[i + kl + 1] == 34 {
+                DECL j : int<64> = 0
+                DECL ok : int<64> = 1
+                WHILE j < kl {
+                    IF b[i + 1 + j] != key[j] {
+                        ok = 0
+                        j = kl
+                    } ELSE {
+                        j = j + 1
+                    }
+                }
+                IF ok == 1 {
+                    RETURN i
+                }
+            }
+        }
+        i = i + 1
+    }
+    RETURN -1
+}
+
+# offset of the first value byte after `"key":`
+FUNC pj_val(b : buf<>, from : int<64>, n : int<64>, key : buf<>) : int<64> {
+    DECL k : int<64> = pj_key(b, from, n, key)
+    IF k < 0 {
+        RETURN -1
+    }
+    DECL i : int<64> = k + len(key) + 2
+    WHILE i < n {
+        IF b[i] == 58 {
+            RETURN oc_skip_ws(b, i + 1, n)
+        }
+        i = i + 1
+    }
+    RETURN -1
+}
+
+DECL pj_end : int<64> = 0        # cursor just past the value last read
+
+FUNC pj_int(b : buf<>, at : int<64>, n : int<64>) : int<64> {
+    DECL neg : int<64> = 0
+    IF at < n {
+        IF b[at] == 45 {
+            neg = 1
+            at = at + 1
+        }
+    }
+    DECL v : int<64> = 0
+    # NOTE: break with a flag, never by assigning at = n.  Doing the latter
+    # leaves pj_end at the end of the buffer and every subsequent key lookup
+    # starts past the data — which silently zeroed every array but the first
+    # element of each.
+    DECL stop : int<64> = 0
+    WHILE stop == 0 {
+        IF at >= n {
+            stop = 1
+        } ELSE {
+            IF oc_is_digit(b[at]) == 1 {
+                v = v * 10 + (b[at] - 48)
+                at = at + 1
+            } ELSE {
+                stop = 1
+            }
+        }
+    }
+    pj_end = at
+    IF neg == 1 {
+        RETURN 0 - v
+    }
+    RETURN v
+}
+
+# read a quoted string; leaves its bounds in pj_str_off / pj_str_len
+DECL pj_str_off : int<64> = 0
+DECL pj_str_len : int<64> = 0
+
+FUNC pj_str(b : buf<>, at : int<64>, n : int<64>) : int<64> {
+    IF at >= n {
+        RETURN 0
+    }
+    IF b[at] != 34 {
+        RETURN 0
+    }
+    DECL s : int<64> = at + 1
+    DECL i : int<64> = s
+    WHILE i < n {
+        IF b[i] == 34 {
+            pj_str_off = s
+            pj_str_len = i - s
+            pj_end = i + 1
+            RETURN pj_str_len
+        }
+        i = i + 1
+    }
+    RETURN 0
+}
+
+# integer value of `key` searched from `from`
+FUNC pj_int_of(b : buf<>, from : int<64>, n : int<64>, key : buf<>) : int<64> {
+    DECL v : int<64> = pj_val(b, from, n, key)
+    IF v < 0 {
+        RETURN 0
+    }
+    RETURN pj_int(b, v, n)
+}
+
+# ---------------------------------------------------------------------------
+# section readers (one per array, so no loop body grows large)
+# ---------------------------------------------------------------------------
+
+FUNC pt_read_genes(b : buf<>, from : int<64>, n : int<64>) : int<64> {
+    DECL cur : int<64> = from
+    DECL k : int<64> = 0
+    g_pt_gene_total = 0
+    g_pt_gene_max = 0
+    WHILE k < g_pt_gene_n {
+        DECL vi : int<64> = pj_val(b, cur, n, strbuf("index"))
+        IF vi < 0 {
+            k = g_pt_gene_n
+        } ELSE {
+            DECL idx : int<64> = pj_int(b, vi, n)
+            DECL vc : int<64> = pj_val(b, pj_end, n, strbuf("count"))
+            DECL c : int<64> = pj_int(b, vc, n)
+            IF idx >= 0 {
+                IF idx < PT_MAXG {
+                    g_pt_gene[idx] = c
+                    g_pt_gene_total = g_pt_gene_total + c
+                    IF c > g_pt_gene_max {
+                        g_pt_gene_max = c
+                    }
+                }
+            }
+            cur = pj_end
+            k = k + 1
+        }
+    }
+    RETURN g_pt_gene_total
+}
+
+FUNC pt_read_class(b : buf<>, cur : int<64>, n : int<64>, i : int<64>) : int<64> {
+    DECL vc : int<64> = pj_val(b, cur, n, strbuf("code"))
+    IF vc < 0 {
+        RETURN -1
+    }
+    pj_str(b, vc, n)
+    g_pt_cls_off[i] = pj_str_off
+    g_pt_cls_len[i] = pj_str_len
+    DECL vl : int<64> = pj_val(b, pj_end, n, strbuf("label"))
+    pj_str(b, vl, n)
+    g_pt_lab_off[i] = pj_str_off
+    g_pt_lab_len[i] = pj_str_len
+    DECL vm : int<64> = pj_val(b, pj_end, n, strbuf("maps_to"))
+    pj_str(b, vm, n)
+    g_pt_map_off[i] = pj_str_off
+    g_pt_map_len[i] = pj_str_len
+    DECL vn : int<64> = pj_val(b, pj_end, n, strbuf("count"))
+    g_pt_cls_count[i] = pj_int(b, vn, n)
+    RETURN pj_end
+}
+
+FUNC pt_read_classes(b : buf<>, from : int<64>, n : int<64>) : int<64> {
+    DECL cur : int<64> = from
+    DECL i : int<64> = 0
+    WHILE i < g_pt_cls_n {
+        cur = pt_read_class(b, cur, n, i)
+        IF cur < 0 {
+            i = g_pt_cls_n
+        } ELSE {
+            i = i + 1
+        }
+    }
+    RETURN g_pt_cls_n
+}
+
+FUNC pt_read_velocity(b : buf<>, from : int<64>, n : int<64>) : int<64> {
+    DECL cur : int<64> = from
+    DECL i : int<64> = 0
+    WHILE i < g_pt_vel_n {
+        DECL vy : int<64> = pj_val(b, cur, n, strbuf("year"))
+        IF vy < 0 {
+            i = g_pt_vel_n
+        } ELSE {
+            pj_int(b, vy, n)
+            DECL vc : int<64> = pj_val(b, pj_end, n, strbuf("count"))
+            g_pt_vel[i] = pj_int(b, vc, n)
+            cur = pj_end
+            i = i + 1
+        }
+    }
+    RETURN g_pt_vel_n
+}
+
+FUNC pt_read_applicants(b : buf<>, from : int<64>, n : int<64>) : int<64> {
+    DECL cur : int<64> = from
+    DECL i : int<64> = 0
+    g_pt_app_total = 0
+    WHILE i < g_pt_app_n {
+        DECL vn : int<64> = pj_val(b, cur, n, strbuf("name"))
+        IF vn < 0 {
+            i = g_pt_app_n
+        } ELSE {
+            pj_str(b, vn, n)
+            g_pt_app_off[i] = pj_str_off
+            g_pt_app_len[i] = pj_str_len
+            DECL vc : int<64> = pj_val(b, pj_end, n, strbuf("count"))
+            g_pt_app_count[i] = pj_int(b, vc, n)
+            g_pt_app_total = g_pt_app_total + g_pt_app_count[i]
+            cur = pj_end
+            i = i + 1
+        }
+    }
+    RETURN g_pt_app_n
+}
+
+# ---------------------------------------------------------------------------
+# Load the patent landscape.  Returns the number of gene records, 0 on failure.
+# ---------------------------------------------------------------------------
+FUNC patents_load(path : buf<>) : int<64> {
+    g_pt_src = load(path)
+    DECL n : int<64> = len(g_pt_src)
+    g_pt_loaded = 0
+    IF n < 32 {
+        RETURN 0
+    }
+    DECL b : buf<> = g_pt_src
+
+    DECL vr : int<64> = pj_val(b, 0, n, strbuf("retrieved"))
+    IF vr >= 0 {
+        pj_str(b, vr, n)
+        g_pt_ret_off = pj_str_off
+        g_pt_ret_len = pj_str_len
+    }
+    g_pt_gene_n = pj_int_of(b, 0, n, strbuf("n_genes"))
+    g_pt_cls_n = pj_int_of(b, 0, n, strbuf("n_classes"))
+    g_pt_vel_n = pj_int_of(b, 0, n, strbuf("n_years"))
+    g_pt_year0 = pj_int_of(b, 0, n, strbuf("year0"))
+    g_pt_app_n = pj_int_of(b, 0, n, strbuf("n_applicants"))
+    IF g_pt_gene_n > PT_MAXG {
+        g_pt_gene_n = PT_MAXG
+    }
+    IF g_pt_cls_n > PT_MAXC {
+        g_pt_cls_n = PT_MAXC
+    }
+    IF g_pt_vel_n > PT_MAXY {
+        g_pt_vel_n = PT_MAXY
+    }
+    IF g_pt_app_n > PT_MAXA {
+        g_pt_app_n = PT_MAXA
+    }
+
+    DECL gs : int<64> = pj_val(b, 0, n, strbuf("genes"))
+    IF gs > 0 {
+        pt_read_genes(b, gs, n)
+    }
+    DECL cs : int<64> = pj_val(b, 0, n, strbuf("classes"))
+    IF cs > 0 {
+        pt_read_classes(b, cs, n)
+    }
+    DECL vs : int<64> = pj_val(b, 0, n, strbuf("velocity"))
+    IF vs > 0 {
+        pt_read_velocity(b, vs, n)
+    }
+    DECL as : int<64> = pj_val(b, 0, n, strbuf("applicants"))
+    IF as > 0 {
+        pt_read_applicants(b, as, n)
+    }
+    g_pt_loaded = 1
+    RETURN g_pt_gene_n
+}
+
+# ---------------------------------------------------------------------------
+# derived read-outs
+# ---------------------------------------------------------------------------
+
+FUNC pt_class_name(i : int<64>) : buf<> {
+    RETURN slice(g_pt_src, g_pt_cls_off[i], g_pt_cls_len[i])
+}
+
+FUNC pt_class_label(i : int<64>) : buf<> {
+    RETURN slice(g_pt_src, g_pt_lab_off[i], g_pt_lab_len[i])
+}
+
+FUNC pt_class_maps(i : int<64>) : buf<> {
+    RETURN slice(g_pt_src, g_pt_map_off[i], g_pt_map_len[i])
+}
+
+FUNC pt_applicant(i : int<64>) : buf<> {
+    RETURN slice(g_pt_src, g_pt_app_off[i], g_pt_app_len[i])
+}
+
+FUNC pt_retrieved() : buf<> {
+    RETURN slice(g_pt_src, g_pt_ret_off, g_pt_ret_len)
+}
+
+# least-squares slope of the publication-per-year curve (documents / year)
+FUNC pt_velocity_slope() : float<64> {
+    DECL n : int<64> = g_pt_vel_n
+    IF n < 3 {
+        RETURN 0.0
+    }
+    DECL sx : float<64> = 0.0
+    DECL sy : float<64> = 0.0
+    DECL sxy : float<64> = 0.0
+    DECL sxx : float<64> = 0.0
+    DECL i : int<64> = 0
+    WHILE i < n {
+        DECL x : float<64> = i
+        DECL y : float<64> = g_pt_vel[i]
+        sx = sx + x
+        sy = sy + y
+        sxy = sxy + x * y
+        sxx = sxx + x * x
+        i = i + 1
+    }
+    DECL den : float<64> = n * sxx - sx * sx
+    IF oc_fabs(den) < OC_EPS {
+        RETURN 0.0
+    }
+    RETURN (n * sxy - sx * sy) / den
+}
+
+# compound annual growth of the publication curve, as a fraction
+FUNC pt_velocity_cagr() : float<64> {
+    IF g_pt_vel_n < 2 {
+        RETURN 0.0
+    }
+    DECL first : float<64> = g_pt_vel[0]
+    DECL last : float<64> = g_pt_vel[g_pt_vel_n - 1]
+    IF first < 1.0 {
+        RETURN 0.0
+    }
+    DECL yrs : float<64> = g_pt_vel_n - 1
+    RETURN pow(last / first, 1.0 / yrs) - 1.0
+}
+
+# Herfindahl-Hirschman concentration of the sampled applicants (0..1)
+FUNC pt_applicant_hhi() : float<64> {
+    IF g_pt_app_total == 0 {
+        RETURN 0.0
+    }
+    DECL s : float<64> = 0.0
+    DECL i : int<64> = 0
+    WHILE i < g_pt_app_n {
+        DECL share : float<64> = oc_div(g_pt_app_count[i], g_pt_app_total)
+        s = s + share * share
+        i = i + 1
+    }
+    RETURN s
+}
+
+# patent coverage of one gene, normalised against the busiest gene in the panel
+FUNC pt_gene_norm(i : int<64>) : float<64> {
+    IF g_pt_gene_max == 0 {
+        RETURN 0.0
+    }
+    RETURN oc_div(g_pt_gene[i], g_pt_gene_max)
+}
+
+FUNC pt_class_total() : int<64> {
+    DECL s : int<64> = 0
+    DECL i : int<64> = 0
+    WHILE i < g_pt_cls_n {
+        s = s + g_pt_cls_count[i]
+        i = i + 1
+    }
+    RETURN s
+}

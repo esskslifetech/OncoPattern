@@ -1,0 +1,153 @@
+# ============================================================================
+# oncopattern/report/compare.tech — multi-report diff engine (plan §7.3).
+#
+# Compares two snapshots field by field, classifies each delta as
+# MATCH / MINOR_CHANGE / MAJOR_CHANGE, and separates clinical regressions
+# (tumour acceleration, new mutations, falling immune score) into a dedicated
+# ALERTS section.
+#
+# Row emitters are separate functions throughout: a loop body with seven or
+# more calls trips the machine's loop-fusion fast path, and one call per
+# iteration keeps the emitter on the plain interpreter path.
+#
+# META @module(name:rep_compare, provides:sec_comparison, requires:rep_sections)
+# ============================================================================
+
+IMPORT oncopattern/report/sections
+IMPORT oncopattern/pattern/compare
+
+# statistics captured per snapshot slot, so the two reports can be diffed
+DECL rc_stat : buf<64, float<64>> = null      # slot * REP_NSTAT + i
+DECL rc_took : buf<4, int<64>> = null
+
+FUNC rc_capture(slot : int<64>) : int<64> {
+    DECL i : int<64> = 0
+    WHILE i < REP_NSTAT {
+        rc_stat[slot * REP_NSTAT + i] = rep_stat(i)
+        i = i + 1
+    }
+    rc_took[slot] = 1
+    RETURN REP_NSTAT
+}
+
+FUNC rc_class(pct : float<64>) : int<64> {
+    DECL a : float<64> = oc_fabs(pct)
+    IF a < OC_DELTA_MATCH {
+        RETURN CMP_MATCH
+    }
+    IF a < OC_DELTA_MINOR {
+        RETURN CMP_MINOR
+    }
+    RETURN CMP_MAJOR
+}
+
+# ---------------------------------------------------------------- rows ----
+FUNC rc_stat_row(dst : buf<>, at : int<64>, a : int<64>, b : int<64>, i : int<64>) : int<64> {
+    DECL va : float<64> = rc_stat[a * REP_NSTAT + i]
+    DECL vb : float<64> = rc_stat[b * REP_NSTAT + i]
+    DECL pct : float<64> = oc_pct(vb, va)
+    DECL s : int<64> = at
+    at = oc_cat(dst, at, strbuf("  "))
+    at = oc_cat(dst, at, rep_stat_name(i))
+    at = oc_pad(dst, at, s, 30)
+    at = oc_catf(dst, at, va, 3)
+    at = oc_pad(dst, at, s, 46)
+    at = oc_catf(dst, at, vb, 3)
+    at = oc_pad(dst, at, s, 62)
+    at = oc_catf(dst, at, pct, 1)
+    at = oc_pad(dst, at, s, 76)
+    at = oc_cat(dst, at, cmp_class_name(rc_class(pct)))
+    RETURN oc_nl(dst, at)
+}
+
+FUNC rc_pattern_row(dst : buf<>, at : int<64>, p : int<64>) : int<64> {
+    DECL s : int<64> = at
+    at = oc_cat(dst, at, strbuf("  "))
+    at = oc_cat(dst, at, pat_name(p))
+    at = oc_pad(dst, at, s, 30)
+    at = oc_catf(dst, at, snap_score[p], 3)
+    at = oc_pad(dst, at, s, 46)
+    at = oc_catf(dst, at, snap_score[OC_NPAT + p], 3)
+    at = oc_pad(dst, at, s, 62)
+    at = oc_catf(dst, at, cmp_pct[p], 1)
+    at = oc_pad(dst, at, s, 76)
+    at = oc_cat(dst, at, cmp_class_name(cmp_class[p]))
+    RETURN oc_nl(dst, at)
+}
+
+FUNC rc_alert_row(dst : buf<>, at : int<64>, p : int<64>) : int<64> {
+    at = oc_cat(dst, at, strbuf("  ! "))
+    at = oc_cat(dst, at, pat_name(p))
+    at = oc_cat(dst, at, strbuf(" worsened by "))
+    at = oc_catf(dst, at, oc_fabs(cmp_pct[p]), 1)
+    at = oc_cat(dst, at, strbuf("% ("))
+    at = oc_cat(dst, at, grade_name(snap_grade[p]))
+    at = oc_cat(dst, at, strbuf(" -> "))
+    at = oc_cat(dst, at, grade_name(snap_grade[OC_NPAT + p]))
+    RETURN oc_cat(dst, at, strbuf(")\n"))
+}
+
+# ---------------------------------------------------------------- §8 ------
+# Compare slot `a` (baseline) with slot `b` (follow-up).
+FUNC sec_comparison(dst : buf<>, at : int<64>, a : int<64>, b : int<64>) : int<64> {
+    at = sec_head(dst, at, 8, strbuf("COMPARISON VS BASELINE"))
+    DECL s0 : int<64> = at
+    at = oc_cat(dst, at, strbuf("  FIELD"))
+    at = oc_pad(dst, at, s0, 30)
+    at = oc_cat(dst, at, strbuf("BASELINE"))
+    at = oc_pad(dst, at, s0, 46)
+    at = oc_cat(dst, at, strbuf("FOLLOW-UP"))
+    at = oc_pad(dst, at, s0, 62)
+    at = oc_cat(dst, at, strbuf("DELTA %"))
+    at = oc_pad(dst, at, s0, 76)
+    at = oc_cat(dst, at, strbuf("CLASS"))
+    at = oc_nl(dst, at)
+    at = sec_thin(dst, at, 92)
+
+    DECL i : int<64> = 0
+    WHILE i < REP_NSTAT {
+        at = rc_stat_row(dst, at, a, b, i)
+        i = i + 1
+    }
+
+    # ---- pattern-level diff
+    at = oc_nl(dst, at)
+    at = oc_cat(dst, at, strbuf("  PATTERN-LEVEL DIFF\n"))
+    at = sec_thin(dst, at, 92)
+    DECL majors : int<64> = pat_compare(0, 1)
+    DECL p : int<64> = 0
+    WHILE p < OC_NPAT {
+        IF snap_det[p] == 1 {
+            IF cmp_class[p] != CMP_MATCH {
+                at = rc_pattern_row(dst, at, p)
+            }
+        }
+        p = p + 1
+    }
+
+    # ---- alerts
+    at = oc_nl(dst, at)
+    at = oc_cat(dst, at, strbuf("  ALERTS\n"))
+    at = sec_thin(dst, at, 92)
+    DECL alerts : int<64> = 0
+    p = 0
+    WHILE p < OC_NPAT {
+        IF snap_det[p] == 1 {
+            IF cmp_is_regression(p) == 1 {
+                IF cmp_class[p] == CMP_MAJOR {
+                    at = rc_alert_row(dst, at, p)
+                    alerts = alerts + 1
+                }
+            }
+        }
+        p = p + 1
+    }
+    IF alerts == 0 {
+        at = oc_cat(dst, at, strbuf("  none — no major regression between the two timepoints\n"))
+    }
+    at = oc_nl(dst, at)
+    at = sec_kv(dst, at, strbuf("major changes"), oc_itoa(majors))
+    at = sec_kv(dst, at, strbuf("grade escalations"), oc_itoa(cmp_alerts))
+    at = sec_kv(dst, at, strbuf("regression alerts"), oc_itoa(alerts))
+    RETURN at
+}

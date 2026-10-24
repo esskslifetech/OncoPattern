@@ -1,0 +1,15 @@
+# Small deterministic slice of the pipeline, sized to run on BOTH machines:
+# the C machine and the self-hosted vm.tech (which is ~150x slower).
+IMPORT oncopattern/pattern/detect
+IMPORT oncopattern/data/ingest_vcf
+vcf_load(strbuf("ocdata/variants_P001_t0.vcf"))
+pat_reset()
+detect_snv_cluster()
+detect_tmb()
+detect_msi()
+YIELD g_pat_score[PAT_SNV_CLUSTER]
+YIELD g_pat_loc[PAT_SNV_CLUSTER]
+YIELD g_pat_loc2[PAT_SNV_CLUSTER]
+YIELD g_pat_score[PAT_TMB_HIGH]
+YIELD oc_ftoa(g_pat_score[PAT_MSI_SHIFT], 8)
+YIELD mkstr(oc_hex8(strbuf("oncopattern-determinism")))

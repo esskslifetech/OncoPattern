@@ -1,0 +1,154 @@
+# ============================================================================
+# oncopattern/simulation/angiogenesis.tech — coupled reaction-diffusion on a
+# 2-D grid: nutrient/oxygen, VEGF, and endothelial vessel density.
+#
+#   nutrient : dC/dt = D grad^2 C - lambda C rho          (consumed by tumour)
+#   VEGF     : dG/dt = Dg grad^2 G + s rho H(hypoxia) - dg G
+#   vessels  : dE/dt = chi E G (1 - E) + De grad^2 E      (chemotactic sprout)
+#
+# Discretised with the 5-point Laplacian written as a FLOW stencil.  The grid
+# is a global typed buffer (machine contract 4).  Murray's law is applied to
+# the resulting vessel tree to report a branching-consistent radius.
+#
+# META @module(name:sim_angio, provides:angio_run, requires:sim_params)
+# ============================================================================
+
+IMPORT oncopattern/simulation/params
+
+DECL GN      : int<64> = 64                       # grid side
+DECL GNN     : int<64> = 4096                     # GN*GN
+DECL f_C     : buf<4096, float<64>> = null        # nutrient
+DECL f_C2    : buf<4096, float<64>> = null
+DECL f_G     : buf<4096, float<64>> = null        # VEGF
+DECL f_G2    : buf<4096, float<64>> = null
+DECL f_E     : buf<4096, float<64>> = null        # vessel density
+DECL f_E2    : buf<4096, float<64>> = null
+DECL f_rho   : buf<4096, float<64>> = null        # tumour cell density
+DECL g_hypoxic_frac : float<64> = 0.0
+
+FUNC gidx(i : int<64>, j : int<64>) : int<64> {
+    RETURN i * GN + j
+}
+
+# seed a radially decaying tumour mass at the grid centre
+FUNC angio_init(radius : float<64>) {
+    DECL c : float<64> = GN / 2
+    FLOW seed ...[0..64, 0..64] {
+        DECL di : float<64> = $i - c
+        DECL dj : float<64> = $j - c
+        DECL d : float<64> = sqrt(di * di + dj * dj)
+        DECL k : int<64> = $i * GN + $j
+        IF d < radius {
+            f_rho[k] = 1.0 - d / radius
+        } ELSE {
+            f_rho[k] = 0.0
+        }
+        f_C[k] = 1.0            # fully oxygenated at t=0
+        f_G[k] = 0.0
+        f_E[k] = 0.0
+    }
+    # vessels enter from the left boundary (the feeding artery)
+    DECL i : int<64> = 0
+    WHILE i < GN {
+        f_E[i * GN] = 1.0
+        i = i + 1
+    }
+}
+
+# one explicit timestep of the coupled system
+FUNC angio_step(dt : float<64>) {
+    DECL D   : float<64> = p_diff_D[g_ct]
+    DECL lam : float<64> = p_diff_lam[g_ct]
+    DECL s   : float<64> = p_vegf[g_ct]
+    DECL chi : float<64> = p_chi[g_ct]
+    DECL Dg  : float<64> = D * 0.5
+    DECL De  : float<64> = D * 0.10
+
+    # ---- interior update: 5-point Laplacian stencil
+    FLOW lap ...[1..63, 1..63] {
+        DECL i : int<64> = $i + 1
+        DECL j : int<64> = $j + 1
+        DECL k : int<64> = i * GN + j
+        DECL lapC : float<64> = f_C[k - GN] + f_C[k + GN] + f_C[k - 1] + f_C[k + 1] - 4.0 * f_C[k]
+        DECL lapG : float<64> = f_G[k - GN] + f_G[k + GN] + f_G[k - 1] + f_G[k + 1] - 4.0 * f_G[k]
+        DECL lapE : float<64> = f_E[k - GN] + f_E[k + GN] + f_E[k - 1] + f_E[k + 1] - 4.0 * f_E[k]
+
+        # nutrient: diffusion - consumption + delivery from perfused vessels
+        f_C2[k] = f_C[k] + dt * (D * lapC - lam * f_C[k] * f_rho[k] + 0.05 * f_E[k] * (1.0 - f_C[k]))
+        # VEGF: secreted by hypoxic tumour, diffuses, decays
+        DECL hyp : float<64> = 0.0
+        IF f_C[k] < 0.35 {
+            hyp = f_rho[k]
+        }
+        f_G2[k] = f_G[k] + dt * (Dg * lapG + s * hyp - 0.02 * f_G[k])
+        # endothelium: chemotactic proliferation toward VEGF, logistic cap
+        f_E2[k] = f_E[k] + dt * (chi * f_E[k] * f_G[k] * (1.0 - f_E[k]) + De * lapE)
+    }
+    # ---- Dirichlet/Neumann boundary + swap
+    FLOW commit ...[0..4096] {
+        f_C[$i] = f_C2[$i]
+        f_G[$i] = f_G2[$i]
+        f_E[$i] = f_E2[$i]
+    }
+    DECL b : int<64> = 0
+    WHILE b < GN {
+        f_C[b] = f_C[GN + b]
+        f_C[(GN - 1) * GN + b] = f_C[(GN - 2) * GN + b]
+        f_C[b * GN] = 1.0                        # arterial boundary
+        f_E[b * GN] = 1.0
+        f_C[b * GN + GN - 1] = f_C[b * GN + GN - 2]
+        b = b + 1
+    }
+}
+
+# Run the coupled model; returns mean vessel density.
+FUNC angio_run(steps : int<64>, dt : float<64>) : float<64> {
+    angio_init(14.0)
+    DECL s : int<64> = 0
+    WHILE s < steps {
+        angio_step(dt)
+        s = s + 1
+    }
+    DECL sumE : float<64> = 0.0
+    DECL hyp : int<64> = 0
+    DECL tum : int<64> = 0
+    DECL i : int<64> = 0
+    WHILE i < GNN {
+        sumE = sumE + f_E[i]
+        IF f_rho[i] > 0.0 {
+            tum = tum + 1
+            IF f_C[i] < 0.35 {
+                hyp = hyp + 1
+            }
+        }
+        i = i + 1
+    }
+    g_hypoxic_frac = oc_div(hyp, tum)
+    RETURN oc_div(sumE, GNN)
+}
+
+# nutrient concentration at the tumour core (the hypoxia read-out)
+FUNC angio_core_nutrient() : float<64> {
+    RETURN f_C[gidx(GN //// 2, GN //// 2)]
+}
+
+FUNC angio_total_mass() : float<64> {
+    DECL s : float<64> = 0.0
+    DECL i : int<64> = 0
+    WHILE i < GNN {
+        s = s + f_C[i]
+        i = i + 1
+    }
+    RETURN s
+}
+
+# Murray's law: r_parent^3 = r_child1^3 + r_child2^3.
+# Returns the parent radius that conserves flow for two equal children.
+FUNC murray_parent_radius(rc : float<64>) : float<64> {
+    RETURN pow(2.0 * rc * rc * rc, 1.0 / 3.0)
+}
+
+# vessel-tree branching consistency: 0 = perfect Murray conservation
+FUNC murray_residual(rp : float<64>, r1 : float<64>, r2 : float<64>) : float<64> {
+    RETURN oc_fabs(rp * rp * rp - (r1 * r1 * r1 + r2 * r2 * r2))
+}

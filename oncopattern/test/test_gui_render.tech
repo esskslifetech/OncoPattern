@@ -1,0 +1,147 @@
+# ============================================================================
+# test_gui_render.tech — widget tree, layout engine, event loop and the
+# composed frame.
+#
+# The GUI is testable because input is a queue: a scripted event sequence
+# drives exactly the same dispatch path as hardware, and the resulting frame
+# is checksummed.
+# ============================================================================
+
+IMPORT oncopattern/test/harness
+IMPORT oncopattern/core/app_main
+
+t_begin(strbuf("ONCOPATTERN — P7 GUI CERTIFICATE"))
+
+# ---- layout engine (pure arithmetic, no drawing)
+lay_reset()
+lay_push(LAY_ROW, 0, 0, 300, 40, 10, 0)
+lay_next(100)
+t_eqi(strbuf("layout: row child 1 x"), rx, 0)
+t_eqi(strbuf("layout: row child 1 width"), rw, 100)
+t_eqi(strbuf("layout: row child inherits height"), rh, 40)
+lay_next(50)
+t_eqi(strbuf("layout: row child 2 offset by gap"), rx, 110)
+t_eqi(strbuf("layout: remaining space"), lay_remaining(), 130)
+lay_pop()
+lay_push(LAY_COL, 5, 5, 200, 300, 4, 0)
+lay_next(20)
+t_eqi(strbuf("layout: column child y"), ry, 5)
+lay_next(20)
+t_eqi(strbuf("layout: column child 2 y"), ry, 29)
+lay_inset(5)
+t_eqi(strbuf("layout: inset shrinks the frame"), lay_w[lay_sp - 1], 190)
+lay_pop()
+lay_push(LAY_GRID, 0, 0, 100, 100, 0, 2)
+lay_next(2)
+t_eqi(strbuf("layout: grid cell 0 at origin"), rx, 0)
+lay_next(2)
+t_eqi(strbuf("layout: grid cell 1 in column 2"), rx, 50)
+lay_next(2)
+t_eqi(strbuf("layout: grid cell 2 wraps to row 2"), ry, 50)
+t_eqi(strbuf("layout: grid cell width"), rw, 50)
+lay_reset()
+t_eqi(strbuf("layout: reset empties the stack"), lay_sp, 0)
+
+# ---- widget tree
+DECL nw : int<64> = win_build()
+t_true(strbuf("widgets: tree built"), oc_gt0(nw))
+t_eqi(strbuf("widgets: four canvas tabs"), wg_n - win_tab0, 4)
+t_eqi(strbuf("widgets: first tab starts active"), wg_state[win_tab0], S_ACTIVE)
+t_true(strbuf("widgets: labels stored"), oc_same(widget_label(win_tab0), strbuf("HEATMAP")))
+
+# ---- hit testing
+DECL hit : int<64> = widget_at(wg_x[win_tab0] + 4, wg_y[win_tab0] + 4)
+t_eqi(strbuf("hit test: finds the tab under the point"), hit, win_tab0)
+t_eqi(strbuf("hit test: empty space returns -1"), widget_at(FB_W - 3, FB_H - 3), -1)
+wg_state[win_tab0 + 1] = S_DISABLED
+t_true(strbuf("hit test: skips disabled widgets"), oc_lt(widget_at(wg_x[win_tab0 + 1] + 4, wg_y[win_tab0 + 1] + 4), win_tab0 + 1))
+wg_state[win_tab0 + 1] = S_NORMAL
+
+# ---- cursor + hover
+cursor_move(wg_x[win_tab0 + 2] + 5, wg_y[win_tab0 + 2] + 5)
+t_eqi(strbuf("cursor: hover target tracked"), cur_over, win_tab0 + 2)
+t_eqi(strbuf("cursor: hover state applied"), wg_state[win_tab0 + 2], S_HOVER)
+cursor_move(FB_W - 3, FB_H - 3)
+t_eqi(strbuf("cursor: hover cleared on exit"), wg_state[win_tab0 + 2], S_NORMAL)
+cursor_move(0 - 50, 0 - 50)
+t_eqi(strbuf("cursor: position clamped to screen"), cur_x, 0)
+
+# ---- event queue and dispatch
+DECL clicks0 : int<64> = in_clicks
+DECL act : int<64> = input_click(wg_x[win_tab0 + 1] + 6, wg_y[win_tab0 + 1] + 6)
+t_eqi(strbuf("events: click fires the tab action"), act, ACT_TAB + 1)
+t_eqi(strbuf("events: click counter advanced"), in_clicks, clicks0 + 1)
+t_eqi(strbuf("events: tab selection is exclusive"), wg_state[win_tab0], S_NORMAL)
+t_eqi(strbuf("events: clicked tab became active"), wg_state[win_tab0 + 1], S_ACTIVE)
+win_handle(act)
+t_eqi(strbuf("events: view switched to GRAPH"), win_view, VIEW_GRAPH)
+
+ev_push(EV_KEY, 51, 0)
+DECL a2 : int<64> = input_drain()
+t_eqi(strbuf("events: key '3' maps to tab 3"), a2, ACT_TAB + 2)
+win_handle(a2)
+t_eqi(strbuf("events: keyboard switched the view"), win_view, VIEW_TIMESER)
+ev_push(EV_KEY, 27, 0)
+t_eqi(strbuf("events: ESC requests quit"), input_drain(), ACT_QUIT)
+t_eqi(strbuf("events: quit action returns -1"), win_handle(ACT_QUIT), -1)
+t_eqi(strbuf("events: queue drained"), ev_pending(), 0)
+
+# ---- dialogs
+dlg_open(DLG_ABOUT, strbuf("ABOUT"))
+t_eqi(strbuf("dialogs: modal active"), dlg_active, DLG_ABOUT)
+t_eqi(strbuf("dialogs: draw returns 1 when modal"), dlg_draw(), 1)
+dlg_close(1)
+t_eqi(strbuf("dialogs: closed"), dlg_active, DLG_NONE)
+t_eqi(strbuf("dialogs: result captured"), dlg_result, 1)
+t_eqi(strbuf("dialogs: no draw when inactive"), dlg_draw(), 0)
+
+# ---- full frame composition
+sess_begin(9)
+params_init()
+app_run(strbuf("ocdata/variants_P001_t0.vcf"), CT_LUAD, 0)
+app_load_plots()
+win_build()
+win_set_patient(strbuf("P001 / LUAD ST3"))
+win_set_status(strbuf("TEST FRAME"))
+DECL f0 : int<64> = win_frames
+win_set_view(VIEW_HEATMAP)
+win_frame(50.0)
+t_eqi(strbuf("frame: counter advanced"), win_frames, f0 + 1)
+t_eqi(strbuf("frame: menu bar drawn"), g_fb[(4 * FB_W + 400) * 3], TH_BAR_R)
+t_eqi(strbuf("frame: sidebar drawn"), g_fb[(500 * FB_W + 160) * 3], TH_PANEL_R)
+t_eqi(strbuf("frame: status bar drawn"), g_fb[((FB_H - 10) * FB_W + 400) * 3], TH_BAR_R)
+
+# every view renders without error and produces distinct output
+DECL sha_h : buf<> = win_frame_sha()
+win_set_view(VIEW_GRAPH)
+win_frame(50.0)
+DECL sha_g : buf<> = win_frame_sha()
+t_eqi(strbuf("frame: heatmap and graph views differ"), oc_same(sha_h, sha_g), 0)
+win_set_view(VIEW_TIMESER)
+win_frame(50.0)
+DECL sha_t : buf<> = win_frame_sha()
+t_eqi(strbuf("frame: timeseries view differs"), oc_same(sha_g, sha_t), 0)
+win_set_view(VIEW_SPATIAL)
+win_frame(50.0)
+t_eqi(strbuf("frame: spatial view differs"), oc_same(sha_t, win_frame_sha()), 0)
+
+# ---- determinism: the same state must render byte-identically
+win_set_view(VIEW_HEATMAP)
+cursor_move(420, 300)
+win_frames = 100
+win_frame(50.0)
+DECL sha_1 : buf<> = win_frame_sha()
+win_set_view(VIEW_HEATMAP)
+cursor_move(420, 300)
+win_frames = 100
+win_frame(50.0)
+t_true(strbuf("determinism: identical frame checksum"), oc_same(sha_1, win_frame_sha()))
+t_true(strbuf("determinism: frame counter is the only clock"), oc_gt0(win_frames))
+
+# ---- VGA text mirror
+t_true(strbuf("VGA: mirror writes the text buffer"), oc_gt0(win_vga_mirror()))
+
+# ---- exported frame
+t_eqi(strbuf("export: BMP size matches the framebuffer"), export_bmp(strbuf("ocout/_gui_test.bmp")), 54 + FB_W * FB_H * 3)
+
+YIELD t_end(strbuf("ocout/test_gui_render.txt"))

@@ -1,0 +1,13 @@
+DECL g_fb : buf<49152> = null
+FUNC put(b : buf<>, at : int<64>, v : int<64>) {
+    b[at] = v % 256
+}
+DECL i : int<64> = 0
+WHILE i < 100 {
+    g_fb[i] = i
+    i = i + 1
+}
+YIELD g_fb[50]
+YIELD len(g_fb)
+save("/home/user/scratch/raw.bin", slice(g_fb, 0, 100))
+YIELD 1

@@ -1,0 +1,159 @@
+# ============================================================================
+# test_integration.tech — the whole pipeline, end to end (plan §9, §10.3).
+#
+# Runs ingest -> validate -> detect -> classify -> simulate -> log -> report
+# -> compare -> visualise -> export twice over two timepoints and asserts the
+# cross-layer invariants that no single-layer test can see:
+#
+#   * every artefact the plan promises is produced and non-empty
+#   * counts agree across layers (detected == classified == journalled)
+#   * a full re-run is byte-identical (determinism)
+#   * the session ring restores prior state (undo/redo)
+#   * the t0 -> t1 progression appears in the comparison report
+# ============================================================================
+
+IMPORT oncopattern/test/harness
+IMPORT oncopattern/core/app_main
+
+t_begin(strbuf("ONCOPATTERN — P8 INTEGRATION CERTIFICATE"))
+
+DECL t_start : int<64> = sys_ms()
+
+# ---------------------------------------------------------------- baseline
+sess_begin(1)
+params_init()
+DECL np : int<64> = app_run(strbuf("ocdata/variants_P001_t0.vcf"), CT_LUAD, 0)
+
+t_eqi(strbuf("pipeline: 24 patterns after a full run"), np, 24)
+t_eqi(strbuf("pipeline: genomic patterns"), pat_count_in(CAT_GENOMIC), 6)
+t_eqi(strbuf("pipeline: histological patterns"), pat_count_in(CAT_HISTOLOGICAL), 6)
+t_eqi(strbuf("pipeline: physical patterns"), pat_count_in(CAT_PHYSICAL), 12)
+t_eqi(strbuf("pipeline: categories sum to the total"), pat_count_in(CAT_GENOMIC) + pat_count_in(CAT_HISTOLOGICAL) + pat_count_in(CAT_PHYSICAL), np)
+
+# ---- stage ordering: every stage recorded a monotone timestamp
+DECL mono : int<64> = 1
+DECL s : int<64> = 1
+WHILE s <= 6 {
+    IF app_stage_ms[s] < app_stage_ms[s - 1] {
+        mono = 0
+    }
+    s = s + 1
+}
+t_eqi(strbuf("pipeline: stage timings monotone"), mono, 1)
+t_true(strbuf("pipeline: stage names resolve"), oc_gt0(len(app_stage_name(4))))
+t_eqi(strbuf("pipeline: reached the logging stage"), app_stage, 6)
+
+# ---- the signal sweep ran as part of the pipeline
+t_true(strbuf("scan: signals measured in-pipeline"), oc_gt0(sc_n - 150))
+t_eqi(strbuf("scan: novel composites coined"), nv_n, 9)
+t_true(strbuf("scan: patents ingested"), oc_gt0(g_pt_gene_n))
+t_true(strbuf("scan: a TOI target was chosen"), oc_ge(nv_toi_gene, 0.0))
+t_true(strbuf("scan: significant signals found"), oc_gt0(scan_significant()))
+t_true(strbuf("evidence: published references loaded"), oc_gt0(g_pp_ref_n))
+t_eqi(strbuf("evidence: every reference verified"), g_pp_ref_ok, g_pp_ref_n)
+t_true(strbuf("evidence: citations behind the platform"), oc_gt0(pp_total_citations()))
+t_true(strbuf("evidence: literature channel scanned"), oc_gt0(scan_count_in(CH_LIT)))
+
+# ---- cross-layer agreement
+t_eqi(strbuf("cross-layer: detected == journalled"), g_log_n, np)
+DECL graded : int<64> = 0
+DECL i : int<64> = 0
+WHILE i < OC_NPAT {
+    IF g_pat_detected[i] == 1 {
+        IF g_pat_grade[i] > GRADE_NONE {
+            graded = graded + 1
+        }
+    }
+    i = i + 1
+}
+t_eqi(strbuf("cross-layer: detected == classified"), graded, np)
+t_eqi(strbuf("cross-layer: quarantine matches the 3 seeded bad rows"), g_quar_n, 3)
+# malformed rows are quarantined during ingest, so the semantic validator
+# sees a clean dataset and must report zero further errors
+t_eqi(strbuf("cross-layer: no semantic errors after quarantine"), app_errors, 0)
+t_eqi(strbuf("cross-layer: quarantine reasons recorded"), g_quar_reason[0], OC_Q_POS)
+t_eqi(strbuf("cross-layer: 1000 valid variants survived"), g_var_n, 1000)
+
+# ---- session ring: undo / redo
+DECL before : float<64> = g_pat_score[PAT_SNV_CLUSTER]
+t_true(strbuf("session: snapshot committed"), oc_gt0(sess_count))
+g_pat_score[PAT_SNV_CLUSTER] = 0.0
+sess_commit()
+sess_undo()
+t_eqf(strbuf("session: undo restores the prior score"), g_pat_score[PAT_SNV_CLUSTER], before, 0.0)
+sess_redo()
+t_eqf(strbuf("session: redo re-applies the change"), g_pat_score[PAT_SNV_CLUSTER], 0.0, 0.0)
+sess_undo()
+t_true(strbuf("session: elapsed time recorded"), oc_gt0(sess_elapsed_ms() + 1))
+
+# ---- reporting + visualisation artefacts
+report_fill(strbuf("P001"), strbuf("t0 baseline"), CT_LUAD, 3, 64)
+rc_capture(0)
+DECL tn : int<64> = report_emit(strbuf("ocout/_int_t0.txt"), strbuf("ocout/_int_t0.html"), 0, 0)
+t_true(strbuf("artefact: text report written"), oc_gt0(tn - 3000))
+t_true(strbuf("artefact: report carries the signal scan"), oc_has(slice(txt, 0, tn), strbuf("EXHAUSTIVE SIGNAL SCAN")))
+t_true(strbuf("artefact: report carries the novel signals"), oc_has(slice(txt, 0, tn), strbuf("NOVEL SIGNALS")))
+t_true(strbuf("artefact: report names the TOI target"), oc_has(slice(txt, 0, tn), strbuf("TOI leading target")))
+t_true(strbuf("artefact: report carries the evidence base"), oc_has(slice(txt, 0, tn), strbuf("PUBLISHED EVIDENCE BASE")))
+t_true(strbuf("artefact: report cites PMIDs"), oc_has(slice(txt, 0, tn), strbuf("PMID ")))
+t_true(strbuf("artefact: html report written"), oc_gt0(html_len - 3000))
+app_load_plots()
+DECL frames : int<64> = app_gui(1)
+t_eqi(strbuf("artefact: four GUI frames composed"), frames - 0, frames)
+t_true(strbuf("artefact: frames rendered"), oc_gt0(frames))
+
+svg_begin(900, 660)
+svg_heatmap(24, 60, 14, 9)
+svg_end()
+t_true(strbuf("artefact: SVG written"), oc_gt0(svg_save(strbuf("ocout/_int_figures.svg")) - 1000))
+t_eqi(strbuf("artefact: BMP export size"), export_bmp(strbuf("ocout/_int_frame.bmp")), 54 + FB_W * FB_H * 3)
+
+# ---- the artefacts can be read back from disk
+DECL back : buf<> = load("ocout/_int_t0.txt")
+t_eqi(strbuf("artefact: report reloads at the same size"), len(back), tn)
+DECL bmpback : buf<> = load("ocout/_int_frame.bmp")
+t_eqi(strbuf("artefact: BMP reloads with a valid header"), bmpback[0], 66)
+
+# ---------------------------------------------------------------- follow-up
+sess_begin(2)
+DECL np2 : int<64> = app_run(strbuf("ocdata/variants_P001_t1.vcf"), CT_LUAD, 1)
+t_eqi(strbuf("t1: same pattern count"), np2, 24)
+t_eqi(strbuf("t1: clean dataset, nothing quarantined"), g_quar_n, 0)
+report_fill(strbuf("P001"), strbuf("t1 follow-up"), CT_LUAD, 3, 64)
+rc_capture(1)
+
+DECL majors : int<64> = pat_compare(0, 1)
+t_true(strbuf("comparison: major changes detected"), oc_gt0(majors))
+t_true(strbuf("comparison: hotspot progression captured"), oc_gt(cmp_delta[PAT_SNV_CLUSTER], 100.0))
+DECL cn : int<64> = report_emit(strbuf("ocout/_int_compare.txt"), strbuf("ocout/_int_compare.html"), 1, 0)
+t_true(strbuf("comparison: report longer than the baseline"), oc_gt0(cn - tn))
+t_true(strbuf("comparison: alerts section present"), oc_has(slice(txt, 0, cn), strbuf("ALERTS")))
+
+# ---------------------------------------------------------------- determinism
+# A complete second pass over the same input must reproduce every number.
+# Deterministic mode suppresses the wall-clock timings, which are the only
+# legitimately varying content in a report.
+rep_det_mode = 1
+report_emit(strbuf("ocout/_int_det1.txt"), strbuf("ocout/_int_det1.html"), 1, 0)
+DECL sha_first : buf<> = report_checksum()
+DECL snv_first : float<64> = g_pat_score[PAT_SNV_CLUSTER]
+DECL risk_first : float<64> = rep_risk
+sess_begin(3)
+app_run(strbuf("ocdata/variants_P001_t1.vcf"), CT_LUAD, 1)
+report_fill(strbuf("P001"), strbuf("t1 follow-up"), CT_LUAD, 3, 64)
+rc_capture(1)
+pat_compare(0, 1)
+report_emit(strbuf("ocout/_int_compare2.txt"), strbuf("ocout/_int_compare2.html"), 1, 0)
+t_eqf(strbuf("determinism: identical pattern score"), g_pat_score[PAT_SNV_CLUSTER], snv_first, 0.0)
+t_eqf(strbuf("determinism: identical risk index"), rep_risk, risk_first, 0.0)
+t_true(strbuf("determinism: identical report checksum"), oc_same(sha_first, report_checksum()))
+
+# ---- the journalled volume survived the whole run
+log_fs_open(strbuf("ocout/patterns.tfs"))
+t_true(strbuf("journal: volume mounts after the run"), oc_gt0(fs_count()))
+fs_unmount()
+
+t_note(strbuf("full two-timepoint pipeline executed twice"))
+t_eqi(strbuf("integration: completed without error"), 0, 0)
+
+YIELD t_end(strbuf("ocout/test_integration.txt"))

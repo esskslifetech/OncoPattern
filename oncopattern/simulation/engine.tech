@@ -1,0 +1,338 @@
+# ============================================================================
+# oncopattern/simulation/engine.tech — the simulation orchestrator.
+#
+# One entry point, sim_run(model), dispatches through MATCH to the ODE / PDE /
+# Markov / graph / SSA engines and normalises every result into a common
+# result record plus a byte-serialised output buffer whose sha256 is the run's
+# reproducibility certificate (plan section 5.2).
+#
+#   model                engine                    output
+#   0 growth_logistic    ODE  RK4                  cell-count timeseries
+#   1 growth_gompertz    ODE  RK4                  cell-count timeseries
+#   2 diffusion_2d       PDE  5-point stencil      nutrient grid
+#   3 angiogenesis       coupled PDE               vessel-density grid
+#   4 metastasis         graph Dijkstra            route table
+#   5 mutation_cascade   Markov chain              state probability vector
+#   6 drug_pkpd          ODE  RK4 (3 states)       plasma/tumour concentration
+#   7 immune_interaction ODE  RK4 (Lotka-Volterra) tumour + immune series
+#   8 stochastic_ssa     Gillespie direct method   exact trajectory
+#
+# META @module(name:sim_engine, provides:sim_run, requires:ode,pde,fea,graph)
+# ============================================================================
+
+IMPORT oncopattern/simulation/cell_growth
+IMPORT oncopattern/simulation/angiogenesis
+IMPORT oncopattern/simulation/mutation_cascade
+IMPORT oncopattern/simulation/drug_response
+IMPORT oncopattern/simulation/immune_interaction
+IMPORT oncopattern/simulation/metastasis
+IMPORT oncopattern/simulation/stochastic
+
+DECL SIM_GROWTH_LOG  : int<64> = 0
+DECL SIM_GROWTH_GOMP : int<64> = 1
+DECL SIM_DIFFUSION   : int<64> = 2
+DECL SIM_ANGIO       : int<64> = 3
+DECL SIM_METS        : int<64> = 4
+DECL SIM_CASCADE     : int<64> = 5
+DECL SIM_DRUG        : int<64> = 6
+DECL SIM_IMMUNE      : int<64> = 7
+DECL SIM_SSA         : int<64> = 8
+DECL SIM_N           : int<64> = 9
+
+# --------------------------------------------------------- run configuration
+#   data<model:str, dt:float<64>, steps:int<64>, grid_n:int<32>, ...>
+DECL sim_cfg : data<model:int<64>, dt:float<64>, steps:int<64>, grid_n:int<64>, cancer_type:int<64>, dose:float<64>> = null
+
+# ------------------------------------------------------------- run results
+DECL sim_result   : buf<16, float<64>> = null   # primary scalar per model
+DECL sim_secondary: buf<16, float<64>> = null   # secondary read-out
+DECL sim_ms       : buf<16, int<64>>   = null   # wall time (ms)
+DECL sim_ran      : buf<16, int<64>>   = null
+DECL sim_ser      : buf<8192> = null            # serialised output
+DECL sim_ser_len  : int<64> = 0
+DECL sim_sha      : buf<32, int<64>> = null     # first 4 sha bytes per model
+
+FUNC sim_config(model : int<64>, dt : float<64>, steps : int<64>, ct : int<64>) {
+    sim_cfg.model = model
+    sim_cfg.dt = dt
+    sim_cfg.steps = steps
+    sim_cfg.grid_n = GN
+    sim_cfg.cancer_type = ct
+    params_set_type(ct)
+}
+
+FUNC sim_model_name(m : int<64>) : buf<> {
+    MATCH m {
+        CASE 0 {
+            RETURN strbuf("growth_logistic")
+        }
+        CASE 1 {
+            RETURN strbuf("growth_gompertz")
+        }
+        CASE 2 {
+            RETURN strbuf("diffusion_2d")
+        }
+        CASE 3 {
+            RETURN strbuf("angiogenesis")
+        }
+        CASE 4 {
+            RETURN strbuf("metastasis")
+        }
+        CASE 5 {
+            RETURN strbuf("mutation_cascade")
+        }
+        CASE 6 {
+            RETURN strbuf("drug_pkpd")
+        }
+        CASE 7 {
+            RETURN strbuf("immune_interaction")
+        }
+        ELSE {
+            RETURN strbuf("stochastic_ssa")
+        }
+    }
+}
+
+FUNC sim_engine_name(m : int<64>) : buf<> {
+    MATCH m {
+        CASE 2 {
+            RETURN strbuf("PDE finite-difference")
+        }
+        CASE 3 {
+            RETURN strbuf("coupled PDE")
+        }
+        CASE 4 {
+            RETURN strbuf("graph Dijkstra")
+        }
+        CASE 5 {
+            RETURN strbuf("Markov chain")
+        }
+        CASE 8 {
+            RETURN strbuf("Gillespie SSA")
+        }
+        ELSE {
+            RETURN strbuf("ODE RK4")
+        }
+    }
+}
+
+# ---------------------------------------------------------------------------
+# serialise a float trajectory into the byte buffer so it can be hashed.
+# Fixed 4-decimal text keeps the checksum stable across VMs (the .tech VM and
+# the C machine must agree byte for byte).
+# ---------------------------------------------------------------------------
+FUNC sim_ser_reset() {
+    sim_ser_len = 0
+}
+
+FUNC sim_ser_f(v : float<64>) {
+    sim_ser_len = oc_catf(sim_ser, sim_ser_len, v, 4)
+    sim_ser_len = oc_catb(sim_ser, sim_ser_len, 59)
+}
+
+# ---------------------------------------------------------------------------
+# the dispatcher
+#
+# NOTE (verified language behaviour): MATCH is desugared line-by-line into an
+# IF/ELSE-IF chain, and a nested block (WHILE/IF) inside a CASE body breaks
+# that desugaring — the compiler emits a 0-byte object.  Every CASE below is
+# therefore a single call into a per-model helper that owns its loops.
+# ---------------------------------------------------------------------------
+
+DECL sim_sec : float<64> = 0.0      # secondary read-out of the last helper
+
+FUNC sim_do_growth(model : int<64>) : float<64> {
+    DECL out : float<64> = growth_run(model, sim_cfg.steps, sim_cfg.dt)
+    IF model == 1 {
+        sim_sec = growth_doubling_time()
+    } ELSE {
+        sim_sec = growth_r2()
+    }
+    DECL i : int<64> = 0
+    WHILE i < g_ts_len {
+        sim_ser_f(g_ts_n[i] / 1000000.0)
+        i = i + 16
+    }
+    RETURN out
+}
+
+FUNC sim_do_diffusion() : float<64> {
+    angio_run(sim_cfg.steps, sim_cfg.dt)
+    sim_sec = g_hypoxic_frac
+    DECL i : int<64> = 0
+    WHILE i < GNN {
+        sim_ser_f(f_C[i])
+        i = i + 256
+    }
+    RETURN angio_core_nutrient()
+}
+
+FUNC sim_do_angio() : float<64> {
+    DECL out : float<64> = angio_run(sim_cfg.steps, sim_cfg.dt)
+    sim_sec = g_hypoxic_frac
+    DECL i : int<64> = 0
+    WHILE i < GNN {
+        sim_ser_f(f_E[i])
+        i = i + 256
+    }
+    RETURN out
+}
+
+FUNC sim_do_mets() : float<64> {
+    mets_run(0)
+    DECL top : int<64> = mets_top_target(0)
+    sim_sec = top
+    DECL i : int<64> = 0
+    WHILE i < g_node_n {
+        sim_ser_f(mt_prob[i])
+        i = i + 1
+    }
+    RETURN mt_prob[top]
+}
+
+FUNC sim_do_cascade() : float<64> {
+    DECL out : float<64> = cascade_run(sim_cfg.steps)
+    sim_sec = cascade_expected_hits()
+    DECL i : int<64> = 0
+    WHILE i < MC_S {
+        sim_ser_f(mc_p[i])
+        i = i + 1
+    }
+    RETURN out
+}
+
+FUNC sim_do_drug() : float<64> {
+    DECL out : float<64> = drug_run(sim_cfg.steps, sim_cfg.dt, sim_cfg.dose)
+    sim_sec = drug_cmax()
+    DECL i : int<64> = 0
+    WHILE i < dr_len {
+        sim_ser_f(dr_c1[i])
+        i = i + 8
+    }
+    RETURN out
+}
+
+FUNC sim_do_immune() : float<64> {
+    DECL out : float<64> = immune_run(sim_cfg.steps, sim_cfg.dt, 1000000.0)
+    sim_sec = immune_score()
+    DECL i : int<64> = 0
+    WHILE i < im_len {
+        sim_ser_f(im_T[i] / 1000000.0)
+        i = i + 8
+    }
+    RETURN out
+}
+
+FUNC sim_do_ssa() : float<64> {
+    # SSA_SEED0, not the running ssa_seed: the latter is mutated by every
+    # draw, so reusing it would make a second identical run diverge.
+    DECL out : float<64> = ssa_run(200, sim_cfg.steps, SSA_SEED0)
+    sim_sec = ssa_mean()
+    DECL i : int<64> = 0
+    WHILE i < ssa_len {
+        sim_ser_f(ssa_n[i])
+        i = i + 8
+    }
+    RETURN out
+}
+
+FUNC sim_run(model : int<64>) : float<64> {
+    DECL t0 : int<64> = sys_ms()
+    DECL out : float<64> = 0.0
+    sim_sec = 0.0
+    sim_ser_reset()
+
+    MATCH model {
+        CASE 0 {
+            out = sim_do_growth(0)
+        }
+        CASE 1 {
+            out = sim_do_growth(1)
+        }
+        CASE 2 {
+            out = sim_do_diffusion()
+        }
+        CASE 3 {
+            out = sim_do_angio()
+        }
+        CASE 4 {
+            out = sim_do_mets()
+        }
+        CASE 5 {
+            out = sim_do_cascade()
+        }
+        CASE 6 {
+            out = sim_do_drug()
+        }
+        CASE 7 {
+            out = sim_do_immune()
+        }
+        ELSE {
+            out = sim_do_ssa()
+        }
+    }
+
+    sim_result[model] = out
+    sim_secondary[model] = sim_sec
+    sim_ms[model] = sys_ms() - t0
+    sim_ran[model] = 1
+    DECL h : buf<> = sha256(slice(sim_ser, 0, sim_ser_len))
+    sim_sha[model] = h[0] * 16777216 + h[1] * 65536 + h[2] * 256 + h[3]
+    RETURN out
+}
+
+# checksum of the last serialised output, as printable hex
+FUNC sim_checksum_hex() : buf<> {
+    RETURN oc_hex8(slice(sim_ser, 0, sim_ser_len))
+}
+
+# ---------------------------------------------------------------------------
+# 5.2 convergence certificate: run a model at two resolutions and report the
+# relative deviation.  A converged explicit scheme must satisfy
+# |coarse - fine| / |fine| < tol.
+# ---------------------------------------------------------------------------
+FUNC sim_convergence(model : int<64>, steps_coarse : int<64>, dt_coarse : float<64>) : float<64> {
+    sim_cfg.steps = steps_coarse
+    sim_cfg.dt = dt_coarse
+    DECL coarse : float<64> = sim_run(model)
+    sim_cfg.steps = steps_coarse * 2
+    sim_cfg.dt = dt_coarse / 2.0
+    DECL fine : float<64> = sim_run(model)
+    RETURN oc_div(oc_fabs(coarse - fine), oc_fabs(fine) + OC_EPS)
+}
+
+# run every model once with sane defaults; returns how many completed
+FUNC sim_run_all(ct : int<64>) : int<64> {
+    params_init()
+    DECL k : int<64> = 0
+    sim_config(SIM_GROWTH_LOG, 1.0, 240, ct)
+    sim_cfg.dose = 8.0
+    sim_run(SIM_GROWTH_LOG)
+    k = k + 1
+    sim_config(SIM_GROWTH_GOMP, 1.0, 240, ct)
+    sim_run(SIM_GROWTH_GOMP)
+    k = k + 1
+    sim_config(SIM_DIFFUSION, 0.20, 120, ct)
+    sim_run(SIM_DIFFUSION)
+    k = k + 1
+    sim_config(SIM_ANGIO, 0.20, 120, ct)
+    sim_run(SIM_ANGIO)
+    k = k + 1
+    sim_config(SIM_METS, 1.0, 1, ct)
+    sim_run(SIM_METS)
+    k = k + 1
+    sim_config(SIM_CASCADE, 1.0, 120, ct)
+    sim_run(SIM_CASCADE)
+    k = k + 1
+    sim_config(SIM_DRUG, 0.25, 480, ct)
+    sim_cfg.dose = 8.0
+    sim_run(SIM_DRUG)
+    k = k + 1
+    sim_config(SIM_IMMUNE, 1.0, 360, ct)
+    sim_run(SIM_IMMUNE)
+    k = k + 1
+    sim_config(SIM_SSA, 1.0, 400, ct)
+    sim_run(SIM_SSA)
+    k = k + 1
+    RETURN k
+}

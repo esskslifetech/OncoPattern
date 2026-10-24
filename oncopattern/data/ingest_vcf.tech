@@ -1,0 +1,240 @@
+# ============================================================================
+# oncopattern/data/ingest_vcf.tech — VCF (Variant Call Format) 4.2 parser.
+#
+# Reads the tab-delimited body of a VCF:
+#     CHROM  POS  ID  REF  ALT  QUAL  FILTER  INFO
+# `##` metadata and the `#CHROM` header line are skipped.  Every record is
+# range-checked as it is parsed; failures go to the quarantine table with a
+# reason code rather than being dropped (plan section 9).
+#
+# META @module(name:ingest_vcf, provides:vcf_load, requires:schema
+# ============================================================================
+
+IMPORT oncopattern/data/schema
+
+DECL VCF_POS_MAX : int<64> = 300000000     # longest human chromosome, bases
+DECL VCF_CHR_MAX : int<64> = 24            # 1..22, X=23, Y=24
+
+# "chr7" / "7" / "chrX" -> 1..24, or -1
+FUNC vcf_chrom_id(b : buf<>, from : int<64>, end : int<64>) : int<64> {
+    DECL i : int<64> = from
+    # skip a leading "chr"
+    IF end - from > 3 {
+        IF b[i] == 99 {
+            IF b[i + 1] == 104 {
+                IF b[i + 2] == 114 {
+                    i = i + 3
+                }
+            }
+        }
+    }
+    IF i < end {
+        IF b[i] == 88 {
+            RETURN 23
+        }
+        IF b[i] == 89 {
+            RETURN 24
+        }
+    }
+    DECL v : int<64> = oc_atoi(b, i, end)
+    IF v < 1 {
+        RETURN -1
+    }
+    IF v > VCF_CHR_MAX {
+        RETURN -1
+    }
+    RETURN v
+}
+
+# DP=NN inside the INFO column
+FUNC vcf_info_depth(b : buf<>, from : int<64>, end : int<64>) : int<64> {
+    DECL i : int<64> = from
+    WHILE i < end - 2 {
+        IF b[i] == 68 {
+            IF b[i + 1] == 80 {
+                IF b[i + 2] == 61 {
+                    RETURN oc_atoi(b, i + 3, end)
+                }
+            }
+        }
+        i = i + 1
+    }
+    RETURN 0
+}
+
+# Parse one VCF body line; returns 1 if accepted, 0 if quarantined.
+FUNC vcf_parse_line(b : buf<>, from : int<64>, end : int<64>, lineno : int<64>) : int<64> {
+    # --- field 0: CHROM
+    DECL f0 : int<64> = oc_find(b, from, end, 9)
+    IF f0 < 0 {
+        RETURN 0
+    }
+    DECL chrom : int<64> = vcf_chrom_id(b, from, f0)
+
+    # --- field 1: POS
+    DECL f1 : int<64> = oc_find(b, f0 + 1, end, 9)
+    IF f1 < 0 {
+        RETURN 0
+    }
+    DECL pos : int<64> = oc_atoi(b, f0 + 1, f1)
+    # a leading '-' makes oc_atoi return a negative number: caught below
+
+    # --- field 2: ID (skipped)
+    DECL f2 : int<64> = oc_find(b, f1 + 1, end, 9)
+    IF f2 < 0 {
+        RETURN 0
+    }
+    # --- field 3: REF
+    DECL f3 : int<64> = oc_find(b, f2 + 1, end, 9)
+    IF f3 < 0 {
+        RETURN 0
+    }
+    DECL refc : int<64> = oc_base_code(b[f2 + 1])
+    # --- field 4: ALT
+    DECL f4 : int<64> = oc_find(b, f3 + 1, end, 9)
+    IF f4 < 0 {
+        RETURN 0
+    }
+    DECL altc : int<64> = oc_base_code(b[f3 + 1])
+    # --- field 5: QUAL
+    DECL f5 : int<64> = oc_find(b, f4 + 1, end, 9)
+    IF f5 < 0 {
+        f5 = end
+    }
+    DECL qual : float<64> = oc_atof(b, f4 + 1, f5)
+
+    # ------------------------------------------------ validation gauntlet
+    IF chrom < 1 {
+        oc_quarantine(lineno, 0, OC_Q_CHROM)
+        RETURN 0
+    }
+    IF pos < 1 {
+        oc_quarantine(lineno, 1, OC_Q_POS)
+        RETURN 0
+    }
+    IF pos > VCF_POS_MAX {
+        oc_quarantine(lineno, 1, OC_Q_POS)
+        RETURN 0
+    }
+    IF qual < 0.0 {
+        oc_quarantine(lineno, 5, OC_Q_QUAL)
+        RETURN 0
+    }
+    IF refc < 0 {
+        oc_quarantine(lineno, 3, OC_Q_BASE)
+        RETURN 0
+    }
+    IF altc < 0 {
+        oc_quarantine(lineno, 4, OC_Q_BASE)
+        RETURN 0
+    }
+
+    # ------------------------------------------------------------- accept
+    IF g_var_n >= OC_MAX_VAR {
+        RETURN 0
+    }
+    g_var_chrom[g_var_n] = chrom
+    g_var_pos[g_var_n] = pos
+    g_var_ref[g_var_n] = refc
+    g_var_alt[g_var_n] = altc
+    g_var_qual[g_var_n] = qual
+    DECL dstart : int<64> = f5 + 1
+    IF dstart < end {
+        g_var_depth[g_var_n] = vcf_info_depth(b, dstart, end)
+    } ELSE {
+        g_var_depth[g_var_n] = 0
+    }
+    g_var_n = g_var_n + 1
+    RETURN 1
+}
+
+# Load a VCF file; returns the number of ACCEPTED variants.
+# g_quar_n holds the number quarantined.
+FUNC vcf_load(path : buf<>) : int<64> {
+    DECL src : buf<> = load(path)
+    DECL n : int<64> = len(src)
+    DECL pos : int<64> = 0
+    DECL lineno : int<64> = 0
+    g_var_n = 0
+    g_quar_n = 0
+    WHILE pos < n {
+        DECL eol : int<64> = oc_find(src, pos, n, 10)
+        IF eol < 0 {
+            eol = n
+        }
+        lineno = lineno + 1
+        IF eol > pos {
+            IF src[pos] != 35 {
+                vcf_parse_line(src, pos, eol, lineno)
+            }
+        }
+        pos = eol + 1
+    }
+    RETURN g_var_n
+}
+
+# ---------------------------------------------------------------------------
+# derived cohort statistics
+# ---------------------------------------------------------------------------
+
+# transition (A<->G, C<->T) vs transversion — a classic QC signature
+FUNC vcf_is_transition(r : int<64>, a : int<64>) : int<64> {
+    IF r == 0 {
+        IF a == 2 {
+            RETURN 1
+        }
+    }
+    IF r == 2 {
+        IF a == 0 {
+            RETURN 1
+        }
+    }
+    IF r == 1 {
+        IF a == 3 {
+            RETURN 1
+        }
+    }
+    IF r == 3 {
+        IF a == 1 {
+            RETURN 1
+        }
+    }
+    RETURN 0
+}
+
+FUNC vcf_ti_tv() : float<64> {
+    DECL ti : int<64> = 0
+    DECL tv : int<64> = 0
+    DECL i : int<64> = 0
+    WHILE i < g_var_n {
+        IF vcf_is_transition(g_var_ref[i], g_var_alt[i]) == 1 {
+            ti = ti + 1
+        } ELSE {
+            tv = tv + 1
+        }
+        i = i + 1
+    }
+    RETURN oc_div(ti, tv)
+}
+
+FUNC vcf_mean_qual() : float<64> {
+    DECL s : float<64> = 0.0
+    DECL i : int<64> = 0
+    WHILE i < g_var_n {
+        s = s + g_var_qual[i]
+        i = i + 1
+    }
+    RETURN oc_div(s, g_var_n)
+}
+
+FUNC vcf_count_chrom(c : int<64>) : int<64> {
+    DECL k : int<64> = 0
+    DECL i : int<64> = 0
+    WHILE i < g_var_n {
+        IF g_var_chrom[i] == c {
+            k = k + 1
+        }
+        i = i + 1
+    }
+    RETURN k
+}

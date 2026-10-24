@@ -1,0 +1,329 @@
+# ============================================================================
+# oncopattern/pattern/registry.tech — the cancer-pattern registry.
+#
+# Every pattern OncoPattern can detect is declared here with META
+# @register_pattern (the directive form used by stdlib/patterns.tech).  The
+# core compiler treats unknown directives inertly, and mcp/pass2_patterns.tech
+# consumes them, so the same source is both documentation and metadata.
+#
+# `semantic_ops` records the cost model the plan assigns to each detector; the
+# registry keeps it so the report can print a work estimate next to a result.
+#
+# META @module(name:pat_registry, provides:pat_reg, requires:schema)
+# ============================================================================
+
+IMPORT oncopattern/data/schema
+
+# ---------------------------------------------------------------- genomic
+META @register_pattern(name:snv_cluster, category:genomic, semantic_ops:3*N)
+META @register_pattern(name:cnv_segment, category:genomic, semantic_ops:2*N)
+META @register_pattern(name:msi_shift, category:genomic, semantic_ops:N*logN)
+META @register_pattern(name:mutational_signature, category:genomic, semantic_ops:5*M*K*N)
+META @register_pattern(name:tmb_high, category:genomic, semantic_ops:N)
+META @register_pattern(name:expression_cluster, category:genomic, semantic_ops:3*G*S)
+# ----------------------------------------------------------- histological
+META @register_pattern(name:nuclear_pleomorphism, category:histological, semantic_ops:2*N)
+META @register_pattern(name:mitotic_density, category:histological, semantic_ops:N)
+META @register_pattern(name:tumor_stroma_ratio, category:histological, semantic_ops:N)
+META @register_pattern(name:necrosis_pattern, category:histological, semantic_ops:4*N)
+META @register_pattern(name:til_gradient, category:histological, semantic_ops:3*N)
+META @register_pattern(name:vascular_invasion, category:histological, semantic_ops:2*N)
+# ---------------------------------------------------------------- physical
+META @register_pattern(name:tumor_growth, category:physical, semantic_ops:steps*4)
+META @register_pattern(name:nutrient_diffusion, category:physical, semantic_ops:steps*N*N*5)
+META @register_pattern(name:angiogenesis, category:physical, semantic_ops:steps*N*N*8)
+META @register_pattern(name:thermal_ablation, category:physical, semantic_ops:steps*N*N*5)
+META @register_pattern(name:radiation_dose, category:physical, semantic_ops:steps*N)
+META @register_pattern(name:chemotaxis, category:physical, semantic_ops:steps*N*N*7)
+META @register_pattern(name:mechanical_stress, category:physical, semantic_ops:N*N*3)
+META @register_pattern(name:metastasis_route, category:physical, semantic_ops:V+E)
+META @register_pattern(name:mutation_cascade, category:physical, semantic_ops:gens*S*S)
+META @register_pattern(name:drug_response, category:physical, semantic_ops:steps*8)
+META @register_pattern(name:immune_interaction, category:physical, semantic_ops:steps*6)
+META @register_pattern(name:stochastic_kinetics, category:physical, semantic_ops:events*R)
+
+# ------------------------------------------------------------ pattern ids
+DECL PAT_SNV_CLUSTER   : int<64> = 0
+DECL PAT_CNV_SEGMENT   : int<64> = 1
+DECL PAT_MSI_SHIFT     : int<64> = 2
+DECL PAT_MUT_SIGNATURE : int<64> = 3
+DECL PAT_TMB_HIGH      : int<64> = 4
+DECL PAT_EXPR_CLUSTER  : int<64> = 5
+DECL PAT_PLEOMORPHISM  : int<64> = 6
+DECL PAT_MITOTIC       : int<64> = 7
+DECL PAT_STROMA_RATIO  : int<64> = 8
+DECL PAT_NECROSIS      : int<64> = 9
+DECL PAT_TIL_GRADIENT  : int<64> = 10
+DECL PAT_VASC_INVASION : int<64> = 11
+DECL PAT_GROWTH        : int<64> = 12
+DECL PAT_DIFFUSION     : int<64> = 13
+DECL PAT_ANGIOGENESIS  : int<64> = 14
+DECL PAT_ABLATION      : int<64> = 15
+DECL PAT_RADIATION     : int<64> = 16
+DECL PAT_CHEMOTAXIS    : int<64> = 17
+DECL PAT_STRESS        : int<64> = 18
+DECL PAT_METASTASIS    : int<64> = 19
+DECL PAT_CASCADE       : int<64> = 20
+DECL PAT_DRUG          : int<64> = 21
+DECL PAT_IMMUNE        : int<64> = 22
+DECL PAT_STOCHASTIC    : int<64> = 23
+DECL OC_NPAT           : int<64> = 24
+
+DECL CAT_GENOMIC       : int<64> = 0
+DECL CAT_HISTOLOGICAL  : int<64> = 1
+DECL CAT_PHYSICAL      : int<64> = 2
+
+# --------------------------------------------------------- registry state
+DECL g_pat_detected : buf<32, int<64>>   = null   # 1 once the detector fired
+DECL g_pat_score    : buf<32, float<64>> = null   # the measured quantity
+DECL g_pat_conf     : buf<32, float<64>> = null   # 0..1 confidence
+DECL g_pat_loc      : buf<32, int<64>>   = null   # chromosome / pixel / node
+DECL g_pat_loc2     : buf<32, int<64>>   = null   # secondary coordinate
+DECL g_pat_ops      : buf<32, int<64>>   = null   # semantic ops actually run
+DECL g_pat_n        : int<64> = 0                 # detections recorded
+
+FUNC pat_name(id : int<64>) : buf<> {
+    MATCH id {
+        CASE 0 {
+            RETURN strbuf("snv_cluster")
+        }
+        CASE 1 {
+            RETURN strbuf("cnv_segment")
+        }
+        CASE 2 {
+            RETURN strbuf("msi_shift")
+        }
+        CASE 3 {
+            RETURN strbuf("mutational_signature")
+        }
+        CASE 4 {
+            RETURN strbuf("tmb_high")
+        }
+        CASE 5 {
+            RETURN strbuf("expression_cluster")
+        }
+        CASE 6 {
+            RETURN strbuf("nuclear_pleomorphism")
+        }
+        CASE 7 {
+            RETURN strbuf("mitotic_density")
+        }
+        CASE 8 {
+            RETURN strbuf("tumor_stroma_ratio")
+        }
+        CASE 9 {
+            RETURN strbuf("necrosis_pattern")
+        }
+        CASE 10 {
+            RETURN strbuf("til_gradient")
+        }
+        CASE 11 {
+            RETURN strbuf("vascular_invasion")
+        }
+        CASE 12 {
+            RETURN strbuf("tumor_growth")
+        }
+        CASE 13 {
+            RETURN strbuf("nutrient_diffusion")
+        }
+        CASE 14 {
+            RETURN strbuf("angiogenesis")
+        }
+        CASE 15 {
+            RETURN strbuf("thermal_ablation")
+        }
+        CASE 16 {
+            RETURN strbuf("radiation_dose")
+        }
+        CASE 17 {
+            RETURN strbuf("chemotaxis")
+        }
+        CASE 18 {
+            RETURN strbuf("mechanical_stress")
+        }
+        CASE 19 {
+            RETURN strbuf("metastasis_route")
+        }
+        CASE 20 {
+            RETURN strbuf("mutation_cascade")
+        }
+        CASE 21 {
+            RETURN strbuf("drug_response")
+        }
+        CASE 22 {
+            RETURN strbuf("immune_interaction")
+        }
+        CASE 23 {
+            RETURN strbuf("stochastic_kinetics")
+        }
+        ELSE {
+            RETURN strbuf("unknown")
+        }
+    }
+}
+
+FUNC pat_category(id : int<64>) : int<64> {
+    IF id < 6 {
+        RETURN CAT_GENOMIC
+    }
+    IF id < 12 {
+        RETURN CAT_HISTOLOGICAL
+    }
+    RETURN CAT_PHYSICAL
+}
+
+FUNC pat_category_name(cat : int<64>) : buf<> {
+    MATCH cat {
+        CASE 0 {
+            RETURN strbuf("genomic")
+        }
+        CASE 1 {
+            RETURN strbuf("histological")
+        }
+        ELSE {
+            RETURN strbuf("physical")
+        }
+    }
+}
+
+# the unit the score is measured in — reports print it after the value
+FUNC pat_unit(id : int<64>) : buf<> {
+    MATCH id {
+        CASE 0 {
+            RETURN strbuf("variants/5kb")
+        }
+        CASE 1 {
+            RETURN strbuf("log2 ratio")
+        }
+        CASE 2 {
+            RETURN strbuf("KS statistic")
+        }
+        CASE 3 {
+            RETURN strbuf("reconstruction err")
+        }
+        CASE 4 {
+            RETURN strbuf("mut/Mb")
+        }
+        CASE 5 {
+            RETURN strbuf("mean log2 FC")
+        }
+        CASE 6 {
+            RETURN strbuf("area CV")
+        }
+        CASE 7 {
+            RETURN strbuf("nuclei/HPF")
+        }
+        CASE 8 {
+            RETURN strbuf("tumour fraction")
+        }
+        CASE 9 {
+            RETURN strbuf("necrotic fraction")
+        }
+        CASE 10 {
+            RETURN strbuf("margin gradient")
+        }
+        CASE 11 {
+            RETURN strbuf("proximity index")
+        }
+        CASE 12 {
+            RETURN strbuf("cells")
+        }
+        CASE 13 {
+            RETURN strbuf("mmol/L")
+        }
+        CASE 14 {
+            RETURN strbuf("vessel density")
+        }
+        CASE 15 {
+            RETURN strbuf("cm3 @60C")
+        }
+        CASE 16 {
+            RETURN strbuf("Gy")
+        }
+        CASE 17 {
+            RETURN strbuf("migration index")
+        }
+        CASE 18 {
+            RETURN strbuf("kPa")
+        }
+        CASE 19 {
+            RETURN strbuf("route cost")
+        }
+        CASE 20 {
+            RETURN strbuf("P(driver)")
+        }
+        CASE 21 {
+            RETURN strbuf("AUC mg.h/L")
+        }
+        CASE 22 {
+            RETURN strbuf("immune/tumour")
+        }
+        ELSE {
+            RETURN strbuf("events")
+        }
+    }
+}
+
+# Record a detection.  Confidence is clamped to [0,1].
+FUNC pat_record(id : int<64>, score : float<64>, conf : float<64>, loc : int<64>, loc2 : int<64>, ops : int<64>) : int<64> {
+    IF id < 0 {
+        RETURN 0
+    }
+    IF id >= OC_NPAT {
+        RETURN 0
+    }
+    IF g_pat_detected[id] == 0 {
+        g_pat_n = g_pat_n + 1
+    }
+    g_pat_detected[id] = 1
+    g_pat_score[id] = score
+    IF conf < 0.0 {
+        conf = 0.0
+    }
+    IF conf > 1.0 {
+        conf = 1.0
+    }
+    g_pat_conf[id] = conf
+    g_pat_loc[id] = loc
+    g_pat_loc2[id] = loc2
+    g_pat_ops[id] = ops
+    RETURN 1
+}
+
+FUNC pat_reset() {
+    DECL i : int<64> = 0
+    WHILE i < OC_NPAT {
+        g_pat_detected[i] = 0
+        g_pat_score[i] = 0.0
+        g_pat_conf[i] = 0.0
+        g_pat_loc[i] = 0
+        g_pat_loc2[i] = 0
+        g_pat_ops[i] = 0
+        i = i + 1
+    }
+    g_pat_n = 0
+}
+
+FUNC pat_count_in(cat : int<64>) : int<64> {
+    DECL k : int<64> = 0
+    DECL i : int<64> = 0
+    WHILE i < OC_NPAT {
+        IF g_pat_detected[i] == 1 {
+            IF pat_category(i) == cat {
+                k = k + 1
+            }
+        }
+        i = i + 1
+    }
+    RETURN k
+}
+
+FUNC pat_total_ops() : int<64> {
+    DECL s : int<64> = 0
+    DECL i : int<64> = 0
+    WHILE i < OC_NPAT {
+        s = s + g_pat_ops[i]
+        i = i + 1
+    }
+    RETURN s
+}

@@ -1,0 +1,98 @@
+# ============================================================================
+# test_pattern.tech — pattern registry, detectors and classification.
+#
+# Assertions are tied to the generator's ground truth (tools/gen_datasets.py):
+# a 120-variant hotspot at chr7:55,000,000, TMB = 1000/50 = 20 mut/Mb, an
+# 8-gene up-regulated block, 24 nuclei blobs and a necrosis disc of r = 11
+# centred at (68, 30).
+# ============================================================================
+
+IMPORT oncopattern/test/harness
+IMPORT oncopattern/pattern/classify
+IMPORT oncopattern/pattern/detect
+IMPORT oncopattern/data/ingest_vcf
+
+t_begin(strbuf("ONCOPATTERN — P2 PATTERN LAYER CERTIFICATE"))
+
+# ---- registry
+t_eqi(strbuf("registry: patterns registered"), OC_NPAT, 24)
+t_eqi(strbuf("registry: genomic ids distinct"), pat_category(PAT_SNV_CLUSTER), CAT_GENOMIC)
+t_eqi(strbuf("registry: histological category"), pat_category(PAT_NECROSIS), CAT_HISTOLOGICAL)
+t_eqi(strbuf("registry: physical category"), pat_category(PAT_ABLATION), CAT_PHYSICAL)
+t_true(strbuf("registry: names non-empty"), oc_gt0(len(pat_name(PAT_TMB_HIGH))))
+t_true(strbuf("registry: units non-empty"), oc_gt0(len(pat_unit(PAT_TMB_HIGH))))
+
+# ---- load the baseline dataset
+vcf_load(strbuf("ocdata/variants_P001_t0.vcf"))
+expr_load(strbuf("ocdata/expression.csv"))
+img_load(strbuf("ocdata/histology.pgm"))
+t_eqi(strbuf("data: valid variants"), g_var_n, 1000)
+t_eqi(strbuf("data: expression genes"), g_expr_g, 40)
+t_eqi(strbuf("data: image pixels"), g_img_w * g_img_h, 9216)
+
+pat_reset()
+t_eqi(strbuf("reset: no patterns detected"), g_pat_n, 0)
+DECL nd : int<64> = detect_all()
+t_eqi(strbuf("detect: all 12 data patterns fire"), nd, 12)
+
+# ---- genomic detectors against ground truth
+t_eqf(strbuf("SNV hotspot density"), g_pat_score[PAT_SNV_CLUSTER], 120.0, 0.5)
+t_eqi(strbuf("SNV hotspot chromosome"), g_pat_loc[PAT_SNV_CLUSTER], 7)
+t_range(strbuf("SNV hotspot position"), g_pat_loc2[PAT_SNV_CLUSTER], 54995000.0, 55005000.0)
+t_eqf(strbuf("TMB = 1000 variants / 50 Mb"), g_pat_score[PAT_TMB_HIGH], 20.0, 0.001)
+t_true(strbuf("TMB exceeds the 10 mut/Mb band"), oc_ge(g_pat_score[PAT_TMB_HIGH], OC_TMB_HIGH))
+t_range(strbuf("MSI KS statistic in [0,1]"), g_pat_score[PAT_MSI_SHIFT], 0.0, 1.0)
+t_range(strbuf("NMF reconstruction error"), g_pat_score[PAT_MUT_SIGNATURE], 0.0, 0.5)
+t_range(strbuf("CNV log2 ratio plausible"), g_pat_score[PAT_CNV_SEGMENT], -3.0, 3.0)
+t_true(strbuf("expression cluster separates T/N"), oc_gt(g_pat_score[PAT_EXPR_CLUSTER], 0.5))
+
+# ---- histological detectors
+t_range(strbuf("nuclei found (24 seeded, merges allowed)"), g_pat_loc[PAT_PLEOMORPHISM], 12.0, 24.0)
+t_range(strbuf("nuclear area CV"), g_pat_score[PAT_PLEOMORPHISM], 0.0, 2.0)
+t_eqi(strbuf("necrosis centroid x = 68"), g_pat_loc[PAT_NECROSIS], 68)
+t_eqi(strbuf("necrosis centroid y = 30"), g_pat_loc2[PAT_NECROSIS], 30)
+# pi * 11^2 / 9216 = 0.0412
+t_eqf(strbuf("necrotic fraction ~ pi r^2 / field"), g_pat_score[PAT_NECROSIS], 0.0412, 0.006)
+t_range(strbuf("tumour/stroma ratio"), g_pat_score[PAT_STROMA_RATIO], 0.3, 0.9)
+t_true(strbuf("TIL gradient non-zero"), oc_gt(oc_fabs(g_pat_score[PAT_TIL_GRADIENT]), 0.0))
+t_range(strbuf("vascular invasion index"), g_pat_score[PAT_VASC_INVASION], 0.0, 1.0)
+
+# ---- confidence bounds hold for every detection
+DECL i : int<64> = 0
+DECL bad : int<64> = 0
+WHILE i < OC_NPAT {
+    IF g_pat_detected[i] == 1 {
+        IF g_pat_conf[i] < 0.0 {
+            bad = bad + 1
+        }
+        IF g_pat_conf[i] > 1.0 {
+            bad = bad + 1
+        }
+    }
+    i = i + 1
+}
+t_eqi(strbuf("all confidences within [0,1]"), bad, 0)
+
+# ---- classification
+DECL crit : int<64> = classify_all()
+t_true(strbuf("classify: critical findings present"), oc_gt0(crit))
+t_eqi(strbuf("classify: TMB 20 -> critical"), g_pat_grade[PAT_TMB_HIGH], GRADE_CRITICAL)
+t_range(strbuf("risk index in [0,100]"), classify_risk_index(), 0.0, 100.0)
+t_eqi(strbuf("undetected patterns graded none"), g_pat_grade[PAT_ABLATION], GRADE_NONE)
+t_true(strbuf("grade names resolve"), oc_gt0(len(grade_name(GRADE_HIGH))))
+
+# ---- determinism: a second identical pass reproduces every score
+DECL first_snv : float<64> = g_pat_score[PAT_SNV_CLUSTER]
+DECL first_nec : float<64> = g_pat_score[PAT_NECROSIS]
+pat_reset()
+detect_all()
+t_eqf(strbuf("determinism: SNV score reproduced"), g_pat_score[PAT_SNV_CLUSTER], first_snv, 0.0)
+t_eqf(strbuf("determinism: necrosis reproduced"), g_pat_score[PAT_NECROSIS], first_nec, 0.0)
+
+# ---- t1 follow-up must show the injected progression
+vcf_load(strbuf("ocdata/variants_P001_t1.vcf"))
+pat_reset()
+detect_all()
+t_eqf(strbuf("t1 hotspot grows to 260"), g_pat_score[PAT_SNV_CLUSTER], 260.0, 0.5)
+
+YIELD t_end(strbuf("ocout/test_pattern.txt"))

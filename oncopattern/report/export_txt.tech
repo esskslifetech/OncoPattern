@@ -1,0 +1,81 @@
+# ============================================================================
+# oncopattern/report/export_txt.tech — plain-text report writer.
+#
+# Assembles the eight sections into one ASCII document with fixed-column
+# tables.  This is the canonical rendering: the HTML exporter reproduces the
+# same numbers with markup around them.
+#
+# META @module(name:rep_txt, provides:txt_build, requires:rep_compare)
+# ============================================================================
+
+IMPORT oncopattern/report/compare
+
+DECL txt      : buf<131072> = null
+DECL txt_len  : int<64> = 0
+
+FUNC txt_build(with_comparison : int<64>) : int<64> {
+    txt_len = 0
+    txt_len = sec_title(txt, txt_len)
+    txt_len = sec_summary(txt, txt_len)
+    txt_len = sec_genomic(txt, txt_len)
+    txt_len = sec_histology(txt, txt_len)
+    txt_len = sec_physical(txt, txt_len)
+    txt_len = sec_simulation(txt, txt_len)
+    txt_len = sec_gallery(txt, txt_len)
+    txt_len = sec_statistics(txt, txt_len)
+    IF with_comparison == 1 {
+        txt_len = sec_comparison(txt, txt_len, 0, 1)
+    }
+    IF sc_n > 0 {
+        txt_len = sec_signal_scan(txt, txt_len, 30)
+        txt_len = sec_novel(txt, txt_len)
+    }
+    IF g_pp_loaded == 1 {
+        txt_len = sec_evidence(txt, txt_len)
+    }
+    txt_len = oc_nl(txt, txt_len)
+    txt_len = sec_rule(txt, txt_len, 74)
+    txt_len = oc_cat(txt, txt_len, strbuf("end of report — "))
+    txt_len = oc_cati(txt, txt_len, g_pat_n)
+    txt_len = oc_cat(txt, txt_len, strbuf(" patterns, "))
+    txt_len = oc_cati(txt, txt_len, g_log_n)
+    txt_len = oc_cat(txt, txt_len, strbuf(" journalled\n"))
+    txt_len = oc_cat(txt, txt_len, oc_project())
+    txt_len = oc_cat(txt, txt_len, strbuf(" "))
+    txt_len = oc_cat(txt, txt_len, oc_version())
+    txt_len = oc_cat(txt, txt_len, strbuf("  ·  "))
+    txt_len = oc_cat(txt, txt_len, oc_company())
+    txt_len = oc_cat(txt, txt_len, strbuf("  ·  "))
+    txt_len = oc_cat(txt, txt_len, oc_author())
+    txt_len = oc_nl(txt, txt_len)
+    txt_len = oc_cat(txt, txt_len, oc_repo())
+    txt_len = oc_nl(txt, txt_len)
+    RETURN txt_len
+}
+
+FUNC txt_save(path : buf<>) : int<64> {
+    save(path, slice(txt, 0, txt_len))
+    RETURN txt_len
+}
+
+FUNC txt_sha() : buf<> {
+    RETURN oc_hex8(slice(txt, 0, txt_len))
+}
+
+# structural validation used by test_report.tech: every section header must be
+# present and in order
+FUNC txt_section_count() : int<64> {
+    DECL k : int<64> = 0
+    DECL i : int<64> = 0
+    WHILE i < txt_len - 2 {
+        IF txt[i] == 10 {
+            IF oc_is_digit(txt[i + 1]) == 1 {
+                IF txt[i + 2] == 46 {
+                    k = k + 1
+                }
+            }
+        }
+        i = i + 1
+    }
+    RETURN k
+}

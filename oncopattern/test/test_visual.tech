@@ -1,0 +1,160 @@
+# ============================================================================
+# test_visual.tech — renderer primitives, colour ramps, raster and vector
+# export.  Every assertion reads pixels back out of the framebuffer or bytes
+# out of the encoded file, so nothing is taken on trust.
+# ============================================================================
+
+IMPORT oncopattern/test/harness
+IMPORT oncopattern/visualization/export_png
+IMPORT oncopattern/visualization/export_svg
+IMPORT oncopattern/visualization/heatmap
+IMPORT oncopattern/visualization/spatial
+IMPORT oncopattern/data/ingest_csv
+
+t_begin(strbuf("ONCOPATTERN — P4 VISUALISATION CERTIFICATE"))
+
+t_eqi(strbuf("font: 95 glyphs decoded"), fnt_init(), 475)
+t_eqi(strbuf("framebuffer size = W*H*3"), FB_N, FB_W * FB_H * 3)
+
+# ---- clear + pixel readback
+fb_clear(10, 20, 30)
+t_eqi(strbuf("clear: first pixel red channel"), g_fb[0], 10)
+t_eqi(strbuf("clear: first pixel green channel"), g_fb[1], 20)
+t_eqi(strbuf("clear: last pixel blue channel"), g_fb[FB_N - 1], 30)
+
+fb_px(100, 50, 255, 128, 64)
+DECL k : int<64> = (50 * FB_W + 100) * 3
+t_eqi(strbuf("pixel: red written"), g_fb[k], 255)
+t_eqi(strbuf("pixel: green written"), g_fb[k + 1], 128)
+t_eqi(strbuf("pixel: blue written"), g_fb[k + 2], 64)
+
+# out-of-range writes must be clipped, not wrapped
+fb_px(0 - 5, 0 - 5, 1, 2, 3)
+fb_px(FB_W + 10, FB_H + 10, 1, 2, 3)
+t_eqi(strbuf("pixel: negative coords clipped"), g_fb[0], 10)
+
+# ---- rect / frame / line / circle
+fb_clear(0, 0, 0)
+fb_rect(10, 10, 20, 20, 200, 100, 50)
+t_eqi(strbuf("rect: interior filled"), g_fb[(20 * FB_W + 20) * 3], 200)
+t_eqi(strbuf("rect: outside untouched"), g_fb[(9 * FB_W + 9) * 3], 0)
+t_eqi(strbuf("rect: right edge exclusive"), g_fb[(20 * FB_W + 30) * 3], 0)
+
+fb_frame(50, 50, 30, 30, 99, 99, 99)
+t_eqi(strbuf("frame: top edge drawn"), g_fb[(50 * FB_W + 60) * 3], 99)
+t_eqi(strbuf("frame: interior hollow"), g_fb[(60 * FB_W + 60) * 3], 0)
+
+fb_line(100, 100, 140, 100, 77, 88, 99)
+t_eqi(strbuf("line: horizontal midpoint drawn"), g_fb[(100 * FB_W + 120) * 3], 77)
+fb_line(200, 100, 200, 140, 77, 88, 99)
+t_eqi(strbuf("line: vertical midpoint drawn"), g_fb[(120 * FB_W + 200) * 3], 77)
+fb_line(300, 100, 340, 140, 66, 66, 66)
+t_eqi(strbuf("line: diagonal midpoint drawn"), g_fb[(120 * FB_W + 320) * 3], 66)
+
+fb_circle(400, 200, 20, 150, 150, 150, 1)
+t_eqi(strbuf("circle: centre filled"), g_fb[(200 * FB_W + 400) * 3], 150)
+t_eqi(strbuf("circle: outside empty"), g_fb[(200 * FB_W + 425) * 3], 0)
+fb_circle(500, 200, 20, 150, 150, 150, 0)
+t_eqi(strbuf("circle: outline hollow centre"), g_fb[(200 * FB_W + 500) * 3], 0)
+
+# ---- text
+fb_clear(0, 0, 0)
+DECL endx : int<64> = fb_text(10, 10, strbuf("ABC"), 1, 255, 255, 255)
+t_eqi(strbuf("text: advances 6px per glyph"), endx, 10 + 18)
+t_eqi(strbuf("text: width helper agrees"), fb_text_w(strbuf("ABC"), 2), 36)
+DECL lit : int<64> = 0
+DECL yy : int<64> = 0
+WHILE yy < 8 {
+    DECL xx : int<64> = 0
+    WHILE xx < 18 {
+        IF g_fb[((10 + yy) * FB_W + 10 + xx) * 3] == 255 {
+            lit = lit + 1
+        }
+        xx = xx + 1
+    }
+    yy = yy + 1
+}
+t_true(strbuf("text: glyph pixels actually lit"), oc_gt0(lit))
+t_eqi(strbuf("text: space glyph is blank"), g_fb[(10 * FB_W + 10 + 6 * 3) * 3], 0)
+
+# ---- colour ramps are monotone and bounded
+ramp(0.0)
+DECL r0 : int<64> = ramp_r
+ramp(1.0)
+t_true(strbuf("ramp: endpoint differs from origin"), oc_gt0(oc_iabs(ramp_r - r0)))
+t_range(strbuf("ramp: red channel in range"), ramp_r, 0.0, 255.0)
+ramp(0.5)
+t_range(strbuf("ramp: midpoint green in range"), ramp_g, 0.0, 255.0)
+ramp_heat(0.0)
+t_eqi(strbuf("heat ramp: cold end is black"), ramp_r + ramp_g + ramp_b, 0)
+ramp_heat(1.0)
+t_eqi(strbuf("heat ramp: hot end is white"), ramp_r + ramp_g + ramp_b, 765)
+ramp(0.0 - 5.0)
+t_range(strbuf("ramp: clamps below zero"), ramp_r, 0.0, 255.0)
+
+# ---- BMP export: structure verified by reading the encoded bytes back
+fb_clear(12, 34, 56)
+DECL n : int<64> = export_bmp_region(strbuf("ocout/_test.bmp"), 64, 48)
+t_eqi(strbuf("BMP: signature byte B"), bmp_buf[0], 66)
+t_eqi(strbuf("BMP: signature byte M"), bmp_buf[1], 77)
+t_eqi(strbuf("BMP: header size 40"), bmp_buf[14], 40)
+t_eqi(strbuf("BMP: width little-endian"), bmp_buf[18], 64)
+t_eqi(strbuf("BMP: height little-endian"), bmp_buf[22], 48)
+t_eqi(strbuf("BMP: 24 bits per pixel"), bmp_buf[28], 24)
+t_eqi(strbuf("BMP: pixel offset 54"), bmp_buf[10], 54)
+t_eqi(strbuf("BMP: total = 54 + w*h*3"), n, 54 + 64 * 48 * 3)
+t_eqi(strbuf("BMP: pixels stored BGR"), bmp_buf[54], 56)
+t_eqi(strbuf("BMP: green channel preserved"), bmp_buf[55], 34)
+t_eqi(strbuf("BMP: red channel preserved"), bmp_buf[56], 12)
+
+# a width needing padding must round the stride up to 4 bytes
+DECL n2 : int<64> = export_bmp_region(strbuf("ocout/_test2.bmp"), 65, 10)
+t_eqi(strbuf("BMP: row padding applied"), n2, 54 + 196 * 10)
+
+# ---- PPM export
+DECL n3 : int<64> = export_ppm(strbuf("ocout/_test.ppm"), 32, 32)
+t_eqi(strbuf("PPM: magic P"), bmp_buf[0], 80)
+t_eqi(strbuf("PPM: magic 6"), bmp_buf[1], 54)
+t_true(strbuf("PPM: header + 32*32*3 bytes"), oc_gt0(n3 - 3072))
+
+# ---- base64 round-trip length
+DECL b64 : int<64> = export_base64(3)
+t_eqi(strbuf("base64: 3 bytes -> 4 chars"), b64, 4)
+t_eqi(strbuf("base64: 1 byte -> 4 chars with padding"), export_base64(1), 4)
+
+# ---- SVG export is well-formed
+svg_begin(400, 300)
+svg_rect(10, 10, 50, 20, 1, 2, 3)
+svg_circle(100, 100, 15, 4, 5, 6)
+svg_line(0, 0, 50, 50, 7, 8, 9, 2)
+svg_text(20, 40, strbuf("LABEL"), 12, 10, 11, 12)
+DECL sl : int<64> = svg_end()
+t_eqi(strbuf("SVG: opens with '<'"), svg[0], 60)
+t_true(strbuf("SVG: non-trivial length"), oc_gt0(sl - 200))
+t_true(strbuf("SVG: contains a rect element"), oc_has(slice(svg, 0, sl), strbuf("<rect")))
+t_true(strbuf("SVG: contains a circle element"), oc_has(slice(svg, 0, sl), strbuf("<circle")))
+t_true(strbuf("SVG: contains a line element"), oc_has(slice(svg, 0, sl), strbuf("<line")))
+t_true(strbuf("SVG: contains a text element"), oc_has(slice(svg, 0, sl), strbuf("<text")))
+t_true(strbuf("SVG: closes the root element"), oc_has(slice(svg, 0, sl), strbuf("</svg>")))
+t_true(strbuf("SVG: declares the namespace"), oc_has(slice(svg, 0, sl), strbuf("xmlns=")))
+t_true(strbuf("SVG: carries a title"), oc_has(slice(svg, 0, sl), strbuf("<title>")))
+t_true(strbuf("SVG: attributed to the company"), oc_has(slice(svg, 0, sl), oc_company()))
+t_true(strbuf("SVG: links the repository"), oc_has(slice(svg, 0, sl), oc_repo()))
+
+# ---- views render without touching out-of-bounds memory
+expr_load(strbuf("ocdata/expression.csv"))
+fb_clear(0, 0, 0)
+t_eqi(strbuf("heatmap: 40x12 cells drawn"), heatmap_draw(20, 20, 400, 400), 480)
+t_true(strbuf("heatmap: scan found a value range"), oc_gt(hm_max, hm_min))
+
+# ---- determinism: identical draw calls -> identical checksum
+fb_clear(7, 7, 7)
+fb_text(30, 30, strbuf("DETERMINISM"), 2, 200, 200, 200)
+export_bmp_region(strbuf("ocout/_det1.bmp"), 128, 64)
+DECL h1 : buf<> = export_bmp_sha()
+fb_clear(7, 7, 7)
+fb_text(30, 30, strbuf("DETERMINISM"), 2, 200, 200, 200)
+export_bmp_region(strbuf("ocout/_det2.bmp"), 128, 64)
+t_true(strbuf("determinism: identical frame checksums"), oc_same(h1, export_bmp_sha()))
+
+YIELD t_end(strbuf("ocout/test_visual.txt"))

@@ -1,0 +1,313 @@
+# ============================================================================
+# oncopattern/visualization/renderer.tech — the pixel-buffer compositor.
+#
+# One global RGB framebuffer (machine contract 4: typed/large buffers are
+# global) plus the primitives every view is drawn from: clear, pixel, rect,
+# line (Bresenham), circle, and text in a built-in 5x7 bitmap font.
+#
+# There is no graphics library underneath — every pixel is written by TECH
+# code in this file, and export_png.tech serialises the same buffer to BMP.
+#
+# META @module(name:vis_renderer, provides:fb_*, requires:constants)
+# ============================================================================
+
+IMPORT oncopattern/core/constants
+
+DECL FB_W  : int<64> = 900
+DECL FB_H  : int<64> = 660
+DECL FB_N  : int<64> = 1782000                  # FB_W * FB_H * 3
+DECL g_fb  : buf<1782000> = null                # RGB, row-major, top-down
+
+# ------------------------------------------------------------ 5x7 font ----
+# 95 glyphs (ASCII 32..126), 5 column bytes each, bit 0 = top row.
+DECL FNT_FIRST : int<64> = 32
+DECL FNT_W     : int<64> = 5
+DECL FNT_H     : int<64> = 7
+DECL FNT_ADV   : int<64> = 6
+DECL fnt       : buf<512> = null
+DECL fnt_hexbuf : buf<1024> = null
+DECL fnt_ready : int<64> = 0
+
+FUNC hexval(c : int<64>) : int<64> {
+    IF c >= 97 {
+        RETURN c - 87
+    }
+    IF c >= 65 {
+        RETURN c - 55
+    }
+    RETURN c - 48
+}
+
+FUNC fnt_init() {
+    IF fnt_ready == 1 {
+        RETURN 0
+    }
+    DECL fx : int<64> = 0
+    fx = oc_cat(fnt_hexbuf, fx, strbuf("000000000000002f000000030003000a1f0a1f0a242a7f2a126313086463324d4d32500000030000001c2241000041221c00"))
+    fx = oc_cat(fnt_hexbuf, fx, strbuf("2a1c3e1c2a08083e080800402000000808080808000020000060100804033e5149453e00427f400042615149462141454b31"))
+    fx = oc_cat(fnt_hexbuf, fx, strbuf("1814127f1027454545393c4a49493001710905033649494936064949291e0000220000002012000008142241001414141414"))
+    fx = oc_cat(fnt_hexbuf, fx, strbuf("004122140802015109063e415d551e7e0909097e7f494949363e414141227f4141221c7f494949417f090909013e4149493a"))
+    fx = oc_cat(fnt_hexbuf, fx, strbuf("7f0808087f00417f4100204040403f7f081422417f404040407f020c027f7f0204087f3e4141413e7f090909063e4151215e"))
+    fx = oc_cat(fnt_hexbuf, fx, strbuf("7f09192946464949493101017f01013f4040403f1f2040201f7f2018207f63140814630304780403615149454300007f4141"))
+    fx = oc_cat(fnt_hexbuf, fx, strbuf("030408106041417f00000402010204404040404000000000007e0909097e7f494949363e414141227f4141221c7f49494941"))
+    fx = oc_cat(fnt_hexbuf, fx, strbuf("7f090909013e4149493a7f0808087f00417f4100204040403f7f081422417f404040407f020c027f7f0204087f3e4141413e"))
+    fx = oc_cat(fnt_hexbuf, fx, strbuf("7f090909063e4151215e7f09192946464949493101017f01013f4040403f1f2040201f7f2018207f63140814630304780403"))
+    fx = oc_cat(fnt_hexbuf, fx, strbuf("6151494543000000000000007f000000000000000804040818"))
+    DECL i : int<64> = 0
+    DECL n : int<64> = fx //// 2
+    WHILE i < n {
+        fnt[i] = hexval(fnt_hexbuf[i * 2]) * 16 + hexval(fnt_hexbuf[i * 2 + 1])
+        i = i + 1
+    }
+    fnt_ready = 1
+    RETURN n
+}
+
+# ------------------------------------------------------------ primitives --
+
+FUNC fb_clear(r : int<64>, g : int<64>, b : int<64>) {
+    DECL i : int<64> = 0
+    WHILE i < FB_N {
+        g_fb[i] = r
+        g_fb[i + 1] = g
+        g_fb[i + 2] = b
+        i = i + 3
+    }
+}
+
+FUNC fb_px(x : int<64>, y : int<64>, r : int<64>, g : int<64>, b : int<64>) {
+    IF x < 0 {
+        RETURN 0
+    }
+    IF y < 0 {
+        RETURN 0
+    }
+    IF x >= FB_W {
+        RETURN 0
+    }
+    IF y >= FB_H {
+        RETURN 0
+    }
+    DECL k : int<64> = (y * FB_W + x) * 3
+    g_fb[k] = r
+    g_fb[k + 1] = g
+    g_fb[k + 2] = b
+    RETURN 1
+}
+
+FUNC fb_rect(x : int<64>, y : int<64>, w : int<64>, h : int<64>, r : int<64>, g : int<64>, b : int<64>) {
+    DECL j : int<64> = 0
+    WHILE j < h {
+        DECL i : int<64> = 0
+        WHILE i < w {
+            fb_px(x + i, y + j, r, g, b)
+            i = i + 1
+        }
+        j = j + 1
+    }
+}
+
+FUNC fb_frame(x : int<64>, y : int<64>, w : int<64>, h : int<64>, r : int<64>, g : int<64>, b : int<64>) {
+    DECL i : int<64> = 0
+    WHILE i < w {
+        fb_px(x + i, y, r, g, b)
+        fb_px(x + i, y + h - 1, r, g, b)
+        i = i + 1
+    }
+    DECL j : int<64> = 0
+    WHILE j < h {
+        fb_px(x, y + j, r, g, b)
+        fb_px(x + w - 1, y + j, r, g, b)
+        j = j + 1
+    }
+}
+
+# Bresenham line
+FUNC fb_line(x0 : int<64>, y0 : int<64>, x1 : int<64>, y1 : int<64>, r : int<64>, g : int<64>, b : int<64>) {
+    DECL dx : int<64> = x1 - x0
+    IF dx < 0 {
+        dx = 0 - dx
+    }
+    DECL dy : int<64> = y1 - y0
+    IF dy < 0 {
+        dy = 0 - dy
+    }
+    DECL sx : int<64> = 1
+    IF x0 > x1 {
+        sx = -1
+    }
+    DECL sy : int<64> = 1
+    IF y0 > y1 {
+        sy = -1
+    }
+    DECL err : int<64> = dx - dy
+    DECL guard : int<64> = 0
+    DECL go : int<64> = 1
+    WHILE go == 1 {
+        fb_px(x0, y0, r, g, b)
+        IF x0 == x1 {
+            IF y0 == y1 {
+                go = 0
+            }
+        }
+        IF go == 1 {
+            DECL e2 : int<64> = err * 2
+            IF e2 > 0 - dy {
+                err = err - dy
+                x0 = x0 + sx
+            }
+            IF e2 < dx {
+                err = err + dx
+                y0 = y0 + sy
+            }
+        }
+        guard = guard + 1
+        IF guard > 4000 {
+            go = 0
+        }
+    }
+}
+
+FUNC fb_circle(cx : int<64>, cy : int<64>, rad : int<64>, r : int<64>, g : int<64>, b : int<64>, filled : int<64>) {
+    DECL dy : int<64> = 0 - rad
+    WHILE dy <= rad {
+        DECL dx : int<64> = 0 - rad
+        WHILE dx <= rad {
+            DECL d2 : int<64> = dx * dx + dy * dy
+            IF filled == 1 {
+                IF d2 <= rad * rad {
+                    fb_px(cx + dx, cy + dy, r, g, b)
+                }
+            } ELSE {
+                IF d2 <= rad * rad {
+                    IF d2 >= (rad - 1) * (rad - 1) {
+                        fb_px(cx + dx, cy + dy, r, g, b)
+                    }
+                }
+            }
+            dx = dx + 1
+        }
+        dy = dy + 1
+    }
+}
+
+# ---------------------------------------------------------------- text ----
+
+FUNC fb_char(x : int<64>, y : int<64>, ch : int<64>, scale : int<64>, r : int<64>, g : int<64>, b : int<64>) {
+    fnt_init()
+    IF ch < FNT_FIRST {
+        RETURN 0
+    }
+    IF ch > 126 {
+        RETURN 0
+    }
+    DECL base : int<64> = (ch - FNT_FIRST) * FNT_W
+    DECL c : int<64> = 0
+    WHILE c < FNT_W {
+        DECL bits : int<64> = fnt[base + c]
+        DECL rr : int<64> = 0
+        WHILE rr < FNT_H {
+            DECL on : int<64> = (bits >> rr) & 1
+            IF on == 1 {
+                IF scale == 1 {
+                    fb_px(x + c, y + rr, r, g, b)
+                } ELSE {
+                    fb_rect(x + c * scale, y + rr * scale, scale, scale, r, g, b)
+                }
+            }
+            rr = rr + 1
+        }
+        c = c + 1
+    }
+    RETURN 1
+}
+
+# draw a byte buffer as text; returns the x cursor after the last glyph
+FUNC fb_text(x : int<64>, y : int<64>, s : buf<>, scale : int<64>, r : int<64>, g : int<64>, b : int<64>) : int<64> {
+    DECL n : int<64> = len(s)
+    DECL i : int<64> = 0
+    WHILE i < n {
+        fb_char(x, y, s[i], scale, r, g, b)
+        x = x + FNT_ADV * scale
+        i = i + 1
+    }
+    RETURN x
+}
+
+FUNC fb_text_w(s : buf<>, scale : int<64>) : int<64> {
+    RETURN len(s) * FNT_ADV * scale
+}
+
+# centred text inside a box
+FUNC fb_text_c(x : int<64>, y : int<64>, w : int<64>, s : buf<>, scale : int<64>, r : int<64>, g : int<64>, b : int<64>) : int<64> {
+    DECL tw : int<64> = fb_text_w(s, scale)
+    RETURN fb_text(x + (w - tw) //// 2, y, s, scale, r, g, b)
+}
+
+# ------------------------------------------------------------ colour ------
+# viridis-like perceptual ramp, t in [0,1] -> packed r,g,b via the globals
+DECL ramp_r : int<64> = 0
+DECL ramp_g : int<64> = 0
+DECL ramp_b : int<64> = 0
+
+FUNC ramp(t : float<64>) {
+    IF t < 0.0 {
+        t = 0.0
+    }
+    IF t > 1.0 {
+        t = 1.0
+    }
+    # piecewise linear through 5 anchors (dark blue -> teal -> green -> yellow)
+    DECL seg : float<64> = t * 4.0
+    DECL i : int<64> = seg //// 1
+    IF i > 3 {
+        i = 3
+    }
+    DECL f : float<64> = seg - i
+    DECL r0 : int<64> = 68
+    DECL g0 : int<64> = 1
+    DECL b0 : int<64> = 84
+    DECL r1 : int<64> = 59
+    DECL g1 : int<64> = 82
+    DECL b1 : int<64> = 139
+    IF i == 1 {
+        r0 = 59
+        g0 = 82
+        b0 = 139
+        r1 = 33
+        g1 = 145
+        b1 = 140
+    }
+    IF i == 2 {
+        r0 = 33
+        g0 = 145
+        b0 = 140
+        r1 = 94
+        g1 = 201
+        b1 = 98
+    }
+    IF i == 3 {
+        r0 = 94
+        g0 = 201
+        b0 = 98
+        r1 = 253
+        g1 = 231
+        b1 = 37
+    }
+    ramp_r = r0 + (r1 - r0) * f
+    ramp_g = g0 + (g1 - g0) * f
+    ramp_b = b0 + (b1 - b0) * f
+}
+
+# heat ramp for temperature fields (black -> red -> orange -> white)
+FUNC ramp_heat(t : float<64>) {
+    IF t < 0.0 {
+        t = 0.0
+    }
+    IF t > 1.0 {
+        t = 1.0
+    }
+    ramp_r = oc_iclamp(t * 3.0 * 255.0 //// 1, 0, 255)
+    ramp_g = oc_iclamp((t - 0.33) * 3.0 * 255.0 //// 1, 0, 255)
+    ramp_b = oc_iclamp((t - 0.66) * 3.0 * 255.0 //// 1, 0, 255)
+}

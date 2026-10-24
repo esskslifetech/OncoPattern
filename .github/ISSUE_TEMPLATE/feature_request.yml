@@ -1,0 +1,52 @@
+name: Feature proposal
+description: A detector, model, report section, signal or export you want the platform to compute.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        OncoPattern holds itself to two rules for new findings: a threshold or
+        model resolves to a published reference, and a detector is asserted
+        against a ground truth that is independent of its own implementation.
+        A proposal that names its evidence is much easier to accept.
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What should it compute
+      description: The quantity, its unit, and how it would be registered (pattern, simulation model, report section, composite signal).
+      placeholder: "A `detect_perineural_invasion` histological detector: fraction of nerve profiles with an adjacent tumour cell within 20 µm. Registered via META @register_pattern as a histological pattern."
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: The publication, guideline or standard the definition and any threshold come from. PMID or DOI if you have them.
+    validations:
+      required: true
+
+  - type: textarea
+    id: verification
+    attributes:
+      label: How a certificate could assert it
+      description: What the planted ground truth would be, or what independent invariant the result must satisfy (conservation, convergence order, an analytic limit, a two-resolution comparison).
+    validations:
+      required: true
+
+  - type: dropdown
+    id: layer
+    attributes:
+      label: Which layer
+      options:
+        - data / ingest
+        - pattern / detect
+        - simulation
+        - visualization / export
+        - report / compare
+        - gui
+        - persistence / fs
+        - scan / novel composites
+    validations:
+      required: true

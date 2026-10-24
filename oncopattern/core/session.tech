@@ -1,0 +1,94 @@
+# ============================================================================
+# oncopattern/core/session.tech — session state and the undo/redo ring.
+#
+# A session is the loaded dataset plus every derived result.  Undo/redo is a
+# fixed-size ring of snapshots of the mutable analysis state (the pattern
+# registry), which is the only thing a user action can change; datasets are
+# immutable once ingested.
+#
+# META @module(name:session, provides:sess_*, requires:pat_compare)
+# ============================================================================
+
+IMPORT oncopattern/pattern/compare
+
+DECL SESS_RING : int<64> = 8
+DECL sess_ring_score : buf<256, float<64>> = null    # slot * OC_NPAT + id
+DECL sess_ring_grade : buf<256, int<64>>   = null
+DECL sess_ring_det   : buf<256, int<64>>   = null
+DECL sess_head  : int<64> = 0        # next write slot
+DECL sess_count : int<64> = 0        # snapshots currently stored
+DECL sess_cur   : int<64> = -1       # cursor within the ring
+DECL sess_id    : int<64> = 0
+DECL sess_start : int<64> = 0
+DECL sess_ops   : int<64> = 0
+
+FUNC sess_begin(id : int<64>) {
+    sess_id = id
+    sess_start = sys_ms()
+    sess_head = 0
+    sess_count = 0
+    sess_cur = -1
+    sess_ops = 0
+}
+
+# push the current registry state onto the ring
+FUNC sess_commit() : int<64> {
+    DECL base : int<64> = sess_head * OC_NPAT
+    DECL i : int<64> = 0
+    WHILE i < OC_NPAT {
+        sess_ring_score[base + i] = g_pat_score[i]
+        sess_ring_grade[base + i] = g_pat_grade[i]
+        sess_ring_det[base + i] = g_pat_detected[i]
+        i = i + 1
+    }
+    sess_cur = sess_head
+    sess_head = (sess_head + 1) % SESS_RING
+    IF sess_count < SESS_RING {
+        sess_count = sess_count + 1
+    }
+    sess_ops = sess_ops + 1
+    RETURN sess_count
+}
+
+FUNC sess_restore(slot : int<64>) : int<64> {
+    IF slot < 0 {
+        RETURN 0
+    }
+    DECL base : int<64> = slot * OC_NPAT
+    DECL n : int<64> = 0
+    DECL i : int<64> = 0
+    WHILE i < OC_NPAT {
+        g_pat_score[i] = sess_ring_score[base + i]
+        g_pat_grade[i] = sess_ring_grade[base + i]
+        g_pat_detected[i] = sess_ring_det[base + i]
+        n = n + g_pat_detected[i]
+        i = i + 1
+    }
+    g_pat_n = n
+    RETURN n
+}
+
+FUNC sess_undo() : int<64> {
+    IF sess_count < 2 {
+        RETURN 0
+    }
+    DECL prev : int<64> = sess_cur - 1
+    IF prev < 0 {
+        prev = SESS_RING - 1
+    }
+    sess_cur = prev
+    RETURN sess_restore(sess_cur)
+}
+
+FUNC sess_redo() : int<64> {
+    IF sess_count < 2 {
+        RETURN 0
+    }
+    DECL nxt : int<64> = (sess_cur + 1) % SESS_RING
+    sess_cur = nxt
+    RETURN sess_restore(sess_cur)
+}
+
+FUNC sess_elapsed_ms() : int<64> {
+    RETURN sys_ms() - sess_start
+}

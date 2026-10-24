@@ -1,0 +1,702 @@
+# ============================================================================
+# oncopattern/pattern/detect.tech — the pattern detection engine.
+#
+# Genomic detectors run over the variant table and the expression matrix;
+# histological detectors run over the pathology image.  Every detector writes
+# its result into the registry with a confidence and a location.
+#
+# Algorithms implemented here (all exact, no library calls):
+#   * sliding-window SNV density          (FLOW stencil over sorted positions)
+#   * depth-ratio CNV segmentation        (binned log2 ratio + MATCH state call)
+#   * inter-variant spacing KS statistic  (MSI-style distribution shift)
+#   * NMF mutational-signature extraction (multiplicative updates, K=2)
+#   * TMB per megabase                    (//// integer floor division)
+#   * connected-component labelling       (iterative flood fill, own stack)
+#   * nuclear morphometry                 (area mean/variance -> CV)
+#   * radial TIL gradient                 (margin-distance binning)
+#
+# META @module(name:pat_detect, provides:detect_all, requires:pat_registry)
+# ============================================================================
+
+IMPORT oncopattern/pattern/registry
+IMPORT oncopattern/data/ingest_csv
+IMPORT oncopattern/data/ingest_image
+
+# panel footprint the TMB is normalised against (megabases)
+DECL OC_PANEL_MB : float<64> = 50.0
+
+# ---------------------------------------------------------------- scratch
+DECL d_bin_cnt   : buf<256, int<64>>   = null    # per-bin variant counts
+DECL d_bin_dep   : buf<256, float<64>> = null    # per-bin mean depth
+DECL d_gap_hist  : buf<32, int<64>>    = null    # inter-variant gap histogram
+DECL d_V         : buf<128, float<64>> = null    # NMF target   (6 x S)
+DECL d_W         : buf<128, float<64>> = null    # NMF basis    (6 x K)
+DECL d_H         : buf<128, float<64>> = null    # NMF loadings (K x S)
+DECL d_R         : buf<128, float<64>> = null    # reconstruction
+DECL d_label     : buf<16384, int<64>> = null    # component labels per pixel
+DECL d_stack     : buf<16384, int<64>> = null    # flood-fill stack
+DECL d_comp_area : buf<512, int<64>>   = null    # area of each component
+DECL d_comp_cx   : buf<512, int<64>>   = null
+DECL d_comp_cy   : buf<512, int<64>>   = null
+DECL d_comp_n    : int<64> = 0
+
+# ===========================================================================
+# 3.1 genomic detectors
+# ===========================================================================
+
+# --- point mutations: densest OC_SNV_WIN window, scanned per chromosome.
+# The variant table is position-sorted within a chromosome, so a two-pointer
+# sweep finds the maximum window occupancy in O(N).
+FUNC detect_snv_cluster() : int<64> {
+    DECL best : int<64> = 0
+    DECL best_chr : int<64> = 0
+    DECL best_pos : int<64> = 0
+    DECL lo : int<64> = 0
+    DECL hi : int<64> = 0
+    WHILE hi < g_var_n {
+        # advance the trailing edge while the window is invalid
+        DECL sliding : int<64> = 1
+        WHILE sliding == 1 {
+            sliding = 0
+            IF lo < hi {
+                IF g_var_chrom[lo] != g_var_chrom[hi] {
+                    lo = lo + 1
+                    sliding = 1
+                } ELSE {
+                    IF g_var_pos[hi] - g_var_pos[lo] > OC_SNV_WIN {
+                        lo = lo + 1
+                        sliding = 1
+                    }
+                }
+            }
+        }
+        DECL occ : int<64> = hi - lo + 1
+        IF occ > best {
+            best = occ
+            best_chr = g_var_chrom[hi]
+            best_pos = g_var_pos[lo]
+        }
+        hi = hi + 1
+    }
+    DECL conf : float<64> = oc_div(best, OC_SNV_MIN * 4)
+    pat_record(PAT_SNV_CLUSTER, best, conf, best_chr, best_pos, 3 * g_var_n)
+    IF best >= OC_SNV_MIN {
+        RETURN 1
+    }
+    RETURN 0
+}
+
+# --- copy-number variation: bin the genome, compare each bin's mean read
+# depth against the cohort median depth, threshold the log2 ratio.
+FUNC detect_cnv() : int<64> {
+    DECL NB : int<64> = 128
+    DECL binsz : int<64> = 25000
+    DECL i : int<64> = 0
+    WHILE i < NB {
+        d_bin_cnt[i] = 0
+        d_bin_dep[i] = 0.0
+        i = i + 1
+    }
+    i = 0
+    WHILE i < g_var_n {
+        DECL b : int<64> = (g_var_chrom[i] * 5 + (g_var_pos[i] //// binsz)) % NB
+        d_bin_cnt[b] = d_bin_cnt[b] + 1
+        d_bin_dep[b] = d_bin_dep[b] + g_var_depth[i]
+        i = i + 1
+    }
+    # global mean depth
+    DECL tot : float<64> = 0.0
+    DECL totn : int<64> = 0
+    i = 0
+    WHILE i < NB {
+        tot = tot + d_bin_dep[i]
+        totn = totn + d_bin_cnt[i]
+        i = i + 1
+    }
+    DECL mean_dep : float<64> = oc_div(tot, totn)
+    # segment call: the most extreme bin decides the reported pattern
+    DECL gains : int<64> = 0
+    DECL losses : int<64> = 0
+    DECL worst : float<64> = 0.0
+    DECL worst_bin : int<64> = 0
+    i = 0
+    WHILE i < NB {
+        IF d_bin_cnt[i] > 3 {
+            DECL bd : float<64> = oc_div(d_bin_dep[i], d_bin_cnt[i])
+            DECL ratio : float<64> = oc_div(bd, mean_dep)
+            DECL l2 : float<64> = 0.0
+            IF ratio > 0.0 {
+                l2 = log(ratio) / log(2.0)
+            }
+            # MATCH-style state call: gain / loss / neutral
+            IF l2 > OC_CNV_GAIN {
+                gains = gains + 1
+            } ELSE {
+                IF l2 < OC_CNV_LOSS {
+                    losses = losses + 1
+                }
+            }
+            IF oc_fabs(l2) > oc_fabs(worst) {
+                worst = l2
+                worst_bin = i
+            }
+        }
+        i = i + 1
+    }
+    pat_record(PAT_CNV_SEGMENT, worst, oc_div(gains + losses, NB) * 4.0, worst_bin, gains + losses, 2 * g_var_n)
+    RETURN gains + losses
+}
+
+# --- MSI: distribution shift of inter-variant spacing.
+# A microsatellite-unstable genome accumulates short-range events, which
+# pushes probability mass into the small-gap bins.  We measure the maximum
+# deviation between the observed cumulative distribution and a geometric
+# reference with the same mean — a Kolmogorov-Smirnov statistic.
+FUNC detect_msi() : float<64> {
+    DECL NBINS : int<64> = 16
+    DECL i : int<64> = 0
+    WHILE i < NBINS {
+        d_gap_hist[i] = 0
+        i = i + 1
+    }
+    DECL n : int<64> = 0
+    DECL sum : float<64> = 0.0
+    i = 1
+    WHILE i < g_var_n {
+        IF g_var_chrom[i] == g_var_chrom[i - 1] {
+            DECL gap : int<64> = g_var_pos[i] - g_var_pos[i - 1]
+            IF gap >= 0 {
+                # log2 binning of the gap length
+                DECL b : int<64> = 0
+                DECL g : int<64> = gap
+                WHILE g > 1 {
+                    g = g //// 2
+                    b = b + 1
+                }
+                d_gap_hist[oc_iclamp(b, 0, NBINS - 1)] = d_gap_hist[oc_iclamp(b, 0, NBINS - 1)] + 1
+                n = n + 1
+                sum = sum + gap
+            }
+        }
+        i = i + 1
+    }
+    IF n == 0 {
+        RETURN 0.0
+    }
+    DECL mean_gap : float<64> = oc_div(sum, n)
+    # KS statistic against the geometric reference exp(-x/mean)
+    DECL cum_obs : float<64> = 0.0
+    DECL ks : float<64> = 0.0
+    DECL edge : float<64> = 1.0
+    i = 0
+    WHILE i < NBINS {
+        cum_obs = cum_obs + oc_div(d_gap_hist[i], n)
+        DECL cum_ref : float<64> = 1.0 - exp(0.0 - oc_div(edge, mean_gap))
+        DECL dev : float<64> = oc_fabs(cum_obs - cum_ref)
+        IF dev > ks {
+            ks = dev
+        }
+        edge = edge * 2.0
+        i = i + 1
+    }
+    pat_record(PAT_MSI_SHIFT, ks, ks * 2.0, 0, n, n * 4)
+    RETURN ks
+}
+
+# --- mutational signatures: non-negative matrix factorisation V ~ W H.
+# V is the 6-substitution-class x S-genomic-bin count matrix; K=2 signatures
+# are extracted with Lee-Seung multiplicative updates.
+FUNC subst_class(r : int<64>, a : int<64>) : int<64> {
+    # C>A C>G C>T T>A T>C T>G after pyrimidine normalisation
+    IF r == 1 {
+        IF a == 0 {
+            RETURN 0
+        }
+        IF a == 2 {
+            RETURN 1
+        }
+        RETURN 2
+    }
+    IF r == 3 {
+        IF a == 0 {
+            RETURN 3
+        }
+        IF a == 1 {
+            RETURN 4
+        }
+        RETURN 5
+    }
+    # purine reference: complement to the pyrimidine strand
+    IF r == 2 {
+        IF a == 3 {
+            RETURN 0
+        }
+        IF a == 1 {
+            RETURN 1
+        }
+        RETURN 2
+    }
+    IF a == 3 {
+        RETURN 3
+    }
+    IF a == 2 {
+        RETURN 4
+    }
+    RETURN 5
+}
+
+FUNC detect_signature() : float<64> {
+    DECL S : int<64> = 8            # genomic bins
+    DECL K : int<64> = 2            # signatures
+    DECL i : int<64> = 0
+    WHILE i < 6 * S {
+        d_V[i] = 0.0
+        i = i + 1
+    }
+    i = 0
+    WHILE i < g_var_n {
+        DECL c : int<64> = subst_class(g_var_ref[i], g_var_alt[i])
+        DECL b : int<64> = (g_var_chrom[i] * 3) % S
+        d_V[c * S + b] = d_V[c * S + b] + 1.0
+        i = i + 1
+    }
+    # deterministic non-zero initialisation
+    i = 0
+    WHILE i < 6 * K {
+        d_W[i] = 0.5 + (i % 3) * 0.25
+        i = i + 1
+    }
+    i = 0
+    WHILE i < K * S {
+        d_H[i] = 0.5 + (i % 4) * 0.2
+        i = i + 1
+    }
+    DECL it : int<64> = 0
+    WHILE it < 60 {
+        # ---- update H:  H *= (W^T V) / (W^T W H)
+        DECL k : int<64> = 0
+        WHILE k < K {
+            DECL j : int<64> = 0
+            WHILE j < S {
+                DECL num : float<64> = 0.0
+                DECL den : float<64> = 0.0
+                DECL c : int<64> = 0
+                WHILE c < 6 {
+                    DECL wr : float<64> = d_W[c * K + k]
+                    num = num + wr * d_V[c * S + j]
+                    DECL rec : float<64> = 0.0
+                    DECL kk : int<64> = 0
+                    WHILE kk < K {
+                        rec = rec + d_W[c * K + kk] * d_H[kk * S + j]
+                        kk = kk + 1
+                    }
+                    den = den + wr * rec
+                    c = c + 1
+                }
+                d_H[k * S + j] = d_H[k * S + j] * oc_div(num, den + OC_EPS)
+                j = j + 1
+            }
+            k = k + 1
+        }
+        # ---- update W:  W *= (V H^T) / (W H H^T)
+        DECL c2 : int<64> = 0
+        WHILE c2 < 6 {
+            DECL k2 : int<64> = 0
+            WHILE k2 < K {
+                DECL num2 : float<64> = 0.0
+                DECL den2 : float<64> = 0.0
+                DECL j2 : int<64> = 0
+                WHILE j2 < S {
+                    DECL hr : float<64> = d_H[k2 * S + j2]
+                    num2 = num2 + hr * d_V[c2 * S + j2]
+                    DECL rec2 : float<64> = 0.0
+                    DECL k3 : int<64> = 0
+                    WHILE k3 < K {
+                        rec2 = rec2 + d_W[c2 * K + k3] * d_H[k3 * S + j2]
+                        k3 = k3 + 1
+                    }
+                    den2 = den2 + hr * rec2
+                    j2 = j2 + 1
+                }
+                d_W[c2 * K + k2] = d_W[c2 * K + k2] * oc_div(num2, den2 + OC_EPS)
+                k2 = k2 + 1
+            }
+            c2 = c2 + 1
+        }
+        it = it + 1
+    }
+    # ---- Frobenius reconstruction error, normalised by ||V||
+    DECL err : float<64> = 0.0
+    DECL mag : float<64> = 0.0
+    DECL c4 : int<64> = 0
+    WHILE c4 < 6 {
+        DECL j4 : int<64> = 0
+        WHILE j4 < S {
+            DECL r4 : float<64> = 0.0
+            DECL k4 : int<64> = 0
+            WHILE k4 < K {
+                r4 = r4 + d_W[c4 * K + k4] * d_H[k4 * S + j4]
+                k4 = k4 + 1
+            }
+            DECL dd : float<64> = d_V[c4 * S + j4] - r4
+            err = err + dd * dd
+            mag = mag + d_V[c4 * S + j4] * d_V[c4 * S + j4]
+            j4 = j4 + 1
+        }
+        c4 = c4 + 1
+    }
+    DECL rel : float<64> = sqrt(oc_div(err, mag + OC_EPS))
+    pat_record(PAT_MUT_SIGNATURE, rel, 1.0 - rel, K, S, 5 * 6 * K * S * 60)
+    RETURN rel
+}
+
+# --- tumour mutational burden (mutations per megabase)
+FUNC detect_tmb() : float<64> {
+    DECL tmb : float<64> = oc_div(g_var_n, OC_PANEL_MB)
+    DECL conf : float<64> = oc_div(tmb, OC_TMB_HIGH * 2.0)
+    pat_record(PAT_TMB_HIGH, tmb, conf, g_var_n, OC_PANEL_MB //// 1, g_var_n)
+    IF tmb >= OC_TMB_HIGH {
+        RETURN tmb
+    }
+    RETURN tmb
+}
+
+# --- expression cluster: mean |log2 FC| of the differentially expressed set
+FUNC detect_expr_cluster() : float<64> {
+    IF g_expr_g == 0 {
+        RETURN 0.0
+    }
+    DECL half : int<64> = g_expr_s //// 2
+    DECL sum : float<64> = 0.0
+    DECL up : int<64> = 0
+    DECL best : float<64> = 0.0
+    DECL best_g : int<64> = 0
+    DECL i : int<64> = 0
+    WHILE i < g_expr_g {
+        DECL fc : float<64> = expr_log_fc(i, 0, half, half, g_expr_s)
+        sum = sum + oc_fabs(fc)
+        IF fc > 1.0 {
+            up = up + 1
+        }
+        IF fc > best {
+            best = fc
+            best_g = i
+        }
+        i = i + 1
+    }
+    DECL mean_fc : float<64> = oc_div(sum, g_expr_g)
+    pat_record(PAT_EXPR_CLUSTER, mean_fc, oc_div(up, g_expr_g) * 3.0, best_g, up, 3 * g_expr_g * g_expr_s)
+    RETURN mean_fc
+}
+
+# ===========================================================================
+# 3.2 histological detectors (connected components on the pathology field)
+# ===========================================================================
+
+# Iterative 4-connected flood fill over pixels whose grey level is inside
+# [lo,hi].  Uses an explicit stack buffer — the single-pass compiler has no
+# forward references, so recursion is avoided by construction.
+FUNC cc_label(lo : int<64>, hi : int<64>, min_area : int<64>) : int<64> {
+    DECL W : int<64> = g_img_w
+    DECL H : int<64> = g_img_h
+    DECL n : int<64> = W * H
+    DECL i : int<64> = 0
+    WHILE i < n {
+        d_label[i] = 0
+        i = i + 1
+    }
+    d_comp_n = 0
+    DECL next_label : int<64> = 1
+    DECL p : int<64> = 0
+    WHILE p < n {
+        DECL v : int<64> = g_img[p]
+        DECL inside : int<64> = 0
+        IF v >= lo {
+            IF v <= hi {
+                inside = 1
+            }
+        }
+        IF inside == 1 {
+            IF d_label[p] == 0 {
+                # ---- new component: flood fill from p
+                DECL sp : int<64> = 0
+                d_stack[0] = p
+                sp = 1
+                d_label[p] = next_label
+                DECL area : int<64> = 0
+                DECL sx : int<64> = 0
+                DECL sy : int<64> = 0
+                WHILE sp > 0 {
+                    sp = sp - 1
+                    DECL q : int<64> = d_stack[sp]
+                    DECL qx : int<64> = q % W
+                    DECL qy : int<64> = q //// W
+                    area = area + 1
+                    sx = sx + qx
+                    sy = sy + qy
+                    # 4-neighbourhood
+                    IF qx > 0 {
+                        DECL l : int<64> = q - 1
+                        IF d_label[l] == 0 {
+                            IF g_img[l] >= lo {
+                                IF g_img[l] <= hi {
+                                    d_label[l] = next_label
+                                    d_stack[sp] = l
+                                    sp = sp + 1
+                                }
+                            }
+                        }
+                    }
+                    IF qx < W - 1 {
+                        DECL r : int<64> = q + 1
+                        IF d_label[r] == 0 {
+                            IF g_img[r] >= lo {
+                                IF g_img[r] <= hi {
+                                    d_label[r] = next_label
+                                    d_stack[sp] = r
+                                    sp = sp + 1
+                                }
+                            }
+                        }
+                    }
+                    IF qy > 0 {
+                        DECL u : int<64> = q - W
+                        IF d_label[u] == 0 {
+                            IF g_img[u] >= lo {
+                                IF g_img[u] <= hi {
+                                    d_label[u] = next_label
+                                    d_stack[sp] = u
+                                    sp = sp + 1
+                                }
+                            }
+                        }
+                    }
+                    IF qy < H - 1 {
+                        DECL dn : int<64> = q + W
+                        IF d_label[dn] == 0 {
+                            IF g_img[dn] >= lo {
+                                IF g_img[dn] <= hi {
+                                    d_label[dn] = next_label
+                                    d_stack[sp] = dn
+                                    sp = sp + 1
+                                }
+                            }
+                        }
+                    }
+                }
+                IF area >= min_area {
+                    IF d_comp_n < 512 {
+                        d_comp_area[d_comp_n] = area
+                        d_comp_cx[d_comp_n] = sx //// area
+                        d_comp_cy[d_comp_n] = sy //// area
+                        d_comp_n = d_comp_n + 1
+                    }
+                }
+                next_label = next_label + 1
+            }
+        }
+        p = p + 1
+    }
+    RETURN d_comp_n
+}
+
+# --- nuclear pleomorphism: coefficient of variation of nuclear area
+FUNC detect_pleomorphism() : float<64> {
+    DECL n : int<64> = cc_label(OC_NUCLEUS_MIN, 255, 4)
+    IF n == 0 {
+        RETURN 0.0
+    }
+    DECL sum : float<64> = 0.0
+    DECL i : int<64> = 0
+    WHILE i < n {
+        sum = sum + d_comp_area[i]
+        i = i + 1
+    }
+    DECL mean : float<64> = oc_div(sum, n)
+    DECL var : float<64> = 0.0
+    i = 0
+    WHILE i < n {
+        DECL d : float<64> = d_comp_area[i] - mean
+        var = var + d * d
+        i = i + 1
+    }
+    var = oc_div(var, n)
+    DECL cv : float<64> = oc_div(sqrt(var), mean)
+    pat_record(PAT_PLEOMORPHISM, cv, cv * 2.0, n, mean //// 1, 2 * g_img_w * g_img_h)
+    # the same labelling gives the mitotic/nuclear density for free
+    DECL hpf : float<64> = oc_div(g_img_w * g_img_h, 2500.0)     # 50x50 px field
+    DECL dens : float<64> = oc_div(n, hpf)
+    pat_record(PAT_MITOTIC, dens, oc_div(dens, 20.0), n, hpf //// 1, g_img_w * g_img_h)
+    RETURN cv
+}
+
+# --- tumour-stroma ratio
+FUNC detect_stroma_ratio() : float<64> {
+    DECL tumour : float<64> = img_frac_in(OC_TUMOUR_MIN, 255)
+    pat_record(PAT_STROMA_RATIO, tumour, tumour, 0, 0, g_img_w * g_img_h)
+    RETURN tumour
+}
+
+# --- necrosis: largest low-intensity connected region
+FUNC detect_necrosis() : float<64> {
+    DECL n : int<64> = cc_label(0, OC_NECROSIS_MAX, 20)
+    DECL biggest : int<64> = 0
+    DECL bi : int<64> = 0
+    DECL total : int<64> = 0
+    DECL i : int<64> = 0
+    WHILE i < n {
+        total = total + d_comp_area[i]
+        IF d_comp_area[i] > biggest {
+            biggest = d_comp_area[i]
+            bi = i
+        }
+        i = i + 1
+    }
+    DECL frac : float<64> = oc_div(total, g_img_w * g_img_h)
+    DECL cx : int<64> = 0
+    DECL cy : int<64> = 0
+    IF n > 0 {
+        cx = d_comp_cx[bi]
+        cy = d_comp_cy[bi]
+    }
+    pat_record(PAT_NECROSIS, frac, frac * 6.0, cx, cy, 4 * g_img_w * g_img_h)
+    RETURN frac
+}
+
+# --- TIL gradient: immune-cell density as a function of distance from the
+# tumour margin.  The margin is the tumour/stroma boundary column; density is
+# sampled in radial bins outwards, and the reported score is the slope.
+FUNC detect_til_gradient() : float<64> {
+    DECL W : int<64> = g_img_w
+    DECL H : int<64> = g_img_h
+    # locate the margin: the column with the largest horizontal intensity step
+    DECL best_step : int<64> = 0
+    DECL margin : int<64> = W //// 2
+    DECL x : int<64> = 1
+    WHILE x < W - 1 {
+        DECL s : int<64> = 0
+        DECL y : int<64> = 0
+        WHILE y < H {
+            DECL d : int<64> = oc_px(x - 1, y) - oc_px(x + 1, y)
+            IF d < 0 {
+                d = 0 - d
+            }
+            s = s + d
+            y = y + 1
+        }
+        IF s > best_step {
+            best_step = s
+            margin = x
+        }
+        x = x + 1
+    }
+    # radial bins outward from the margin
+    DECL BINS : int<64> = 8
+    DECL binw : int<64> = 4
+    DECL first : float<64> = 0.0
+    DECL last : float<64> = 0.0
+    DECL b : int<64> = 0
+    WHILE b < BINS {
+        DECL cnt : int<64> = 0
+        DECL tot : int<64> = 0
+        DECL yy : int<64> = 0
+        WHILE yy < H {
+            DECL xx : int<64> = margin - (b + 1) * binw
+            DECL k : int<64> = 0
+            WHILE k < binw {
+                IF xx + k >= 0 {
+                    tot = tot + 1
+                    IF oc_px(xx + k, yy) >= OC_NUCLEUS_MIN {
+                        cnt = cnt + 1
+                    }
+                }
+                k = k + 1
+            }
+            yy = yy + 1
+        }
+        DECL dens : float<64> = oc_div(cnt, tot)
+        IF b == 0 {
+            first = dens
+        }
+        last = dens
+        b = b + 1
+    }
+    DECL slope : float<64> = first - last
+    pat_record(PAT_TIL_GRADIENT, slope, oc_fabs(slope) * 4.0, margin, BINS, 3 * W * H)
+    RETURN slope
+}
+
+# --- vascular invasion: proximity of nuclear clusters to the necrotic core
+# (a hypoxia-driven invasion corridor).  Score = 1/(1+min distance).
+FUNC detect_vascular_invasion() : float<64> {
+    DECL nn : int<64> = cc_label(OC_NUCLEUS_MIN, 255, 4)
+    # remember nuclear centroids before the necrosis pass overwrites them
+    DECL n1 : int<64> = nn
+    DECL sx : int<64> = 0
+    DECL sy : int<64> = 0
+    DECL i : int<64> = 0
+    WHILE i < n1 {
+        sx = sx + d_comp_cx[i]
+        sy = sy + d_comp_cy[i]
+        i = i + 1
+    }
+    DECL nuc_cx : int<64> = 0
+    DECL nuc_cy : int<64> = 0
+    IF n1 > 0 {
+        nuc_cx = sx //// n1
+        nuc_cy = sy //// n1
+    }
+    DECL nec : int<64> = cc_label(0, OC_NECROSIS_MAX, 20)
+    DECL biggest : int<64> = 0
+    DECL bi : int<64> = 0
+    i = 0
+    WHILE i < nec {
+        IF d_comp_area[i] > biggest {
+            biggest = d_comp_area[i]
+            bi = i
+        }
+        i = i + 1
+    }
+    DECL dx : float<64> = 0.0
+    DECL dy : float<64> = 0.0
+    IF nec > 0 {
+        dx = nuc_cx - d_comp_cx[bi]
+        dy = nuc_cy - d_comp_cy[bi]
+    }
+    DECL dist : float<64> = sqrt(dx * dx + dy * dy)
+    DECL score : float<64> = oc_div(1.0, 1.0 + dist * 0.1)
+    pat_record(PAT_VASC_INVASION, score, score, dist //// 1, nec, 2 * g_img_w * g_img_h)
+    RETURN score
+}
+
+# ===========================================================================
+# orchestration
+# ===========================================================================
+
+FUNC detect_genomic() : int<64> {
+    detect_snv_cluster()
+    detect_cnv()
+    detect_msi()
+    detect_signature()
+    detect_tmb()
+    detect_expr_cluster()
+    RETURN pat_count_in(CAT_GENOMIC)
+}
+
+FUNC detect_histological() : int<64> {
+    IF g_img_w == 0 {
+        RETURN 0
+    }
+    detect_pleomorphism()
+    detect_stroma_ratio()
+    detect_necrosis()
+    detect_til_gradient()
+    detect_vascular_invasion()
+    RETURN pat_count_in(CAT_HISTOLOGICAL)
+}
+
+FUNC detect_all() : int<64> {
+    detect_genomic()
+    detect_histological()
+    RETURN g_pat_n
+}

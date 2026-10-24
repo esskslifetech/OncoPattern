@@ -1,0 +1,108 @@
+# ============================================================================
+# oncopattern/simulation/drug_response.tech — PK/PD two-compartment model.
+#
+# Pharmacokinetics (central plasma C1, peripheral/tumour C2):
+#     dC1/dt = -(ke + k12) C1 + k21 C2 + infusion(t)
+#     dC2/dt =  k12 C1 - k21 C2
+# Pharmacodynamics: Emax/EC50 kill term applied to the tumour population
+#     dN/dt = r N (1 - N/K) - Emax C2/(EC50 + C2) N
+#
+# Integrated with RK4 from the TECH scientific ODE engine; the derivative is
+# dispatched by name through the call_fn trampoline.
+#
+# META @module(name:sim_drug, provides:drug_run, requires:ode,sim_params)
+# ============================================================================
+
+IMPORT oncopattern/simulation/params
+IMPORT unvm/engines/scientific/ode
+
+DECL dr_dose_rate : float<64> = 0.0      # mg/L/h while infusing
+DECL dr_infuse_h  : float<64> = 1.0      # infusion duration per cycle (h)
+DECL dr_cycle_h   : float<64> = 24.0     # dosing interval (h)
+DECL dr_emax      : float<64> = 0.06     # max kill rate (1/h)
+DECL dr_r         : float<64> = 0.0012   # tumour growth (1/h)
+DECL dr_K         : float<64> = 10000000000.0
+
+DECL dr_c1 : buf<512, float<64>> = null  # plasma trajectory
+DECL dr_c2 : buf<512, float<64>> = null  # tumour-compartment trajectory
+DECL dr_n  : buf<512, float<64>> = null  # tumour burden trajectory
+DECL dr_len : int<64> = 0
+DECL dr_auc : float<64> = 0.0
+
+FUNC drug_infusion(t : float<64>) : float<64> {
+    DECL cycles : float<64> = t / dr_cycle_h
+    DECL phase : float<64> = (cycles - (cycles //// 1)) * dr_cycle_h
+    IF phase < dr_infuse_h {
+        RETURN dr_dose_rate
+    }
+    RETURN 0.0
+}
+
+# state: y0 = C1, y1 = C2, y2 = N
+FUNC drug_dy(dummy : int<64>) : int<64> {
+    DECL ke  : float<64> = p_pk_ke[g_ct]
+    DECL k12 : float<64> = p_pk_k12[g_ct]
+    DECL k21 : float<64> = p_pk_k21[g_ct]
+    DECL ec50 : float<64> = p_pd_ec50[g_ct]
+    DECL C1 : float<64> = g_ode_y[0]
+    DECL C2 : float<64> = g_ode_y[1]
+    DECL N  : float<64> = g_ode_y[2]
+    IF C1 < 0.0 {
+        C1 = 0.0
+    }
+    IF C2 < 0.0 {
+        C2 = 0.0
+    }
+    g_ode_dy[0] = 0.0 - (ke + k12) * C1 + k21 * C2 + drug_infusion(g_ode_t)
+    g_ode_dy[1] = k12 * C1 - k21 * C2
+    DECL kill : float<64> = dr_emax * C2 / (ec50 + C2)
+    g_ode_dy[2] = dr_r * N * (1.0 - N / dr_K) - kill * N
+    RETURN 0
+}
+
+# Run `steps` hours of therapy at the given dose rate.  Returns final burden.
+FUNC drug_run(steps : int<64>, h : float<64>, dose_rate : float<64>) : float<64> {
+    dr_dose_rate = dose_rate
+    dr_K = p_growth_K[g_ct]
+    g_ode_n = 3
+    g_ode_t = 0.0
+    g_ode_y[0] = 0.0
+    g_ode_y[1] = 0.0
+    g_ode_y[2] = p_growth_N0[g_ct] * 100.0
+    IF steps > 512 {
+        steps = 512
+    }
+    dr_len = 0
+    dr_auc = 0.0
+    DECL s : int<64> = 0
+    WHILE s < steps {
+        dr_c1[dr_len] = g_ode_y[0]
+        dr_c2[dr_len] = g_ode_y[1]
+        dr_n[dr_len] = g_ode_y[2]
+        dr_len = dr_len + 1
+        dr_auc = dr_auc + g_ode_y[0] * h
+        rk4_step(strbuf("drug_dy"), h)
+        s = s + 1
+    }
+    RETURN g_ode_y[2]
+}
+
+FUNC drug_cmax() : float<64> {
+    DECL m : float<64> = 0.0
+    DECL i : int<64> = 0
+    WHILE i < dr_len {
+        IF dr_c1[i] > m {
+            m = dr_c1[i]
+        }
+        i = i + 1
+    }
+    RETURN m
+}
+
+# fraction of the tumour eliminated relative to the untreated start
+FUNC drug_response_fraction() : float<64> {
+    IF dr_len == 0 {
+        RETURN 0.0
+    }
+    RETURN 1.0 - oc_div(dr_n[dr_len - 1], dr_n[0])
+}

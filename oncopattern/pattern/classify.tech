@@ -1,0 +1,183 @@
+# ============================================================================
+# oncopattern/pattern/classify.tech — pattern -> clinical category mapping.
+#
+# Turns a raw detector read-out into a graded clinical call through MATCH
+# dispatch.  Grades are ordinal so the report can sort and the comparison
+# engine can detect a grade change between timepoints.
+#
+# META @module(name:pat_classify, provides:classify_all, requires:pat_registry)
+# ============================================================================
+
+IMPORT oncopattern/pattern/registry
+
+DECL GRADE_NONE     : int<64> = 0
+DECL GRADE_LOW      : int<64> = 1
+DECL GRADE_MODERATE : int<64> = 2
+DECL GRADE_HIGH     : int<64> = 3
+DECL GRADE_CRITICAL : int<64> = 4
+
+DECL g_pat_grade : buf<32, int<64>> = null
+
+FUNC grade_name(g : int<64>) : buf<> {
+    MATCH g {
+        CASE 0 {
+            RETURN strbuf("none")
+        }
+        CASE 1 {
+            RETURN strbuf("low")
+        }
+        CASE 2 {
+            RETURN strbuf("moderate")
+        }
+        CASE 3 {
+            RETURN strbuf("high")
+        }
+        ELSE {
+            RETURN strbuf("critical")
+        }
+    }
+}
+
+# generic banding helper: value against three ascending thresholds
+FUNC band(v : float<64>, t1 : float<64>, t2 : float<64>, t3 : float<64>) : int<64> {
+    IF v >= t3 {
+        RETURN GRADE_CRITICAL
+    }
+    IF v >= t2 {
+        RETURN GRADE_HIGH
+    }
+    IF v >= t1 {
+        RETURN GRADE_MODERATE
+    }
+    IF v > 0.0 {
+        RETURN GRADE_LOW
+    }
+    RETURN GRADE_NONE
+}
+
+# Clinical thresholds per pattern.  Each line is a documented cut-off, not a
+# generic scale: TMB uses the 10 mut/Mb checkpoint-inhibitor band, MSI uses
+# 0.30, necrosis uses the 10%/30% prognostic bands, and so on.
+FUNC classify_one(id : int<64>) : int<64> {
+    DECL v : float<64> = g_pat_score[id]
+    IF id == PAT_TMB_HIGH {
+        RETURN band(v, OC_TMB_INTERMED, OC_TMB_HIGH, 20.0)
+    }
+    IF id == PAT_MSI_SHIFT {
+        RETURN band(v, 0.15, OC_MSI_HIGH, 0.60)
+    }
+    IF id == PAT_SNV_CLUSTER {
+        RETURN band(v, OC_SNV_MIN, OC_SNV_MIN * 2, OC_SNV_MIN * 4)
+    }
+    IF id == PAT_CNV_SEGMENT {
+        RETURN band(oc_fabs(v), OC_CNV_GAIN, 0.60, 1.00)
+    }
+    IF id == PAT_MUT_SIGNATURE {
+        # low reconstruction error = a confident signature assignment
+        RETURN band(1.0 - v, 0.50, 0.80, 0.95)
+    }
+    IF id == PAT_EXPR_CLUSTER {
+        RETURN band(v, 0.50, 1.00, 2.00)
+    }
+    IF id == PAT_PLEOMORPHISM {
+        RETURN band(v, 0.20, 0.40, 0.70)
+    }
+    IF id == PAT_MITOTIC {
+        RETURN band(v, 2.0, 5.0, 10.0)
+    }
+    IF id == PAT_STROMA_RATIO {
+        RETURN band(v, 0.30, 0.50, 0.70)
+    }
+    IF id == PAT_NECROSIS {
+        RETURN band(v, 0.02, 0.10, 0.30)
+    }
+    IF id == PAT_TIL_GRADIENT {
+        RETURN band(oc_fabs(v), 0.02, 0.08, 0.20)
+    }
+    IF id == PAT_VASC_INVASION {
+        RETURN band(v, 0.10, 0.25, 0.50)
+    }
+    IF id == PAT_GROWTH {
+        # cell count -> volume bands (1e9 cells ~ 1 cm3)
+        RETURN band(v / 1000000000.0, 1.0, 10.0, 50.0)
+    }
+    IF id == PAT_DIFFUSION {
+        # LOW nutrient is the dangerous direction: invert
+        RETURN band(1.0 - v, 0.40, 0.65, 0.85)
+    }
+    IF id == PAT_ANGIOGENESIS {
+        RETURN band(v, 0.01, 0.05, 0.15)
+    }
+    IF id == PAT_ABLATION {
+        RETURN band(v, 0.05, 0.20, 0.50)
+    }
+    IF id == PAT_RADIATION {
+        RETURN band(v, 20.0, 40.0, 60.0)
+    }
+    IF id == PAT_CHEMOTAXIS {
+        RETURN band(v, 5.0, 10.0, 18.0)
+    }
+    IF id == PAT_STRESS {
+        RETURN band(v, 0.05, 0.20, 0.50)
+    }
+    IF id == PAT_METASTASIS {
+        RETURN band(v, 0.20, 0.50, 0.75)
+    }
+    IF id == PAT_CASCADE {
+        RETURN band(v, 0.20, 0.50, 0.80)
+    }
+    IF id == PAT_DRUG {
+        RETURN band(v, 50.0, 150.0, 300.0)
+    }
+    IF id == PAT_IMMUNE {
+        # a HIGH immune/tumour ratio is protective: invert the scale
+        RETURN band(1.0 - oc_fmin(v, 1.0), 0.50, 0.80, 0.95)
+    }
+    RETURN band(v, 100.0, 250.0, 400.0)
+}
+
+FUNC classify_all() : int<64> {
+    DECL crit : int<64> = 0
+    DECL i : int<64> = 0
+    WHILE i < OC_NPAT {
+        IF g_pat_detected[i] == 1 {
+            g_pat_grade[i] = classify_one(i)
+            IF g_pat_grade[i] >= GRADE_HIGH {
+                crit = crit + 1
+            }
+        } ELSE {
+            g_pat_grade[i] = GRADE_NONE
+        }
+        i = i + 1
+    }
+    RETURN crit
+}
+
+# aggregate risk index: confidence-weighted mean grade, scaled to 0..100
+FUNC classify_risk_index() : float<64> {
+    DECL num : float<64> = 0.0
+    DECL den : float<64> = 0.0
+    DECL i : int<64> = 0
+    WHILE i < OC_NPAT {
+        IF g_pat_detected[i] == 1 {
+            num = num + g_pat_grade[i] * g_pat_conf[i]
+            den = den + g_pat_conf[i]
+        }
+        i = i + 1
+    }
+    RETURN oc_div(num, den) * 25.0
+}
+
+FUNC classify_count_grade(g : int<64>) : int<64> {
+    DECL k : int<64> = 0
+    DECL i : int<64> = 0
+    WHILE i < OC_NPAT {
+        IF g_pat_detected[i] == 1 {
+            IF g_pat_grade[i] == g {
+                k = k + 1
+            }
+        }
+        i = i + 1
+    }
+    RETURN k
+}

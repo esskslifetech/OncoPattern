@@ -1,0 +1,350 @@
+# ============================================================================
+# oncopattern/data/ingest_papers.tech — published-literature loader.
+#
+# Parses datasets/papers.json, which tools/fetch_papers.py retrieves from
+# Europe PMC (EMBL-EBI) — the curated index over PubMed/MEDLINE and PMC.
+# Three real measurements are carried:
+#
+#   refs[]      for every threshold and every simulation model this platform
+#               implements, the most-cited paper whose TITLE actually
+#               establishes it, with PMID, DOI, journal, year and citations.
+#               These turn the platform's constants from magic numbers into
+#               checkable citations: TMB >= 10 mut/Mb is Samstein 2019, the
+#               linear-quadratic dose model is Fowler 1989, the chemotaxis
+#               kernel is Keller & Segel 1971.
+#   genes[]     per gene of the expression panel, the number of cancer papers
+#               naming it in the TITLE — deliberately the same title-restricted
+#               methodology as the EPO patent counts, so the two are comparable.
+#   velocity[]  cancer publications per year, to sit beside the patent curve.
+#
+# The JSON scanner primitives (pj_*) are shared with ingest_patents.tech.
+#
+# META @module(name:ingest_papers, provides:papers_load, requires:ingest_patents)
+# ============================================================================
+
+IMPORT oncopattern/data/ingest_patents
+
+DECL PP_MAXR : int<64> = 32
+DECL PP_MAXG : int<64> = 64
+DECL PP_MAXY : int<64> = 32
+
+DECL g_pp_src     : buf<> = null
+DECL g_pp_loaded  : int<64> = 0
+
+# ---- evidence references
+DECL g_pp_key_off : buf<32, int<64>> = null
+DECL g_pp_key_len : buf<32, int<64>> = null
+DECL g_pp_bak_off : buf<32, int<64>> = null     # what it backs in this codebase
+DECL g_pp_bak_len : buf<32, int<64>> = null
+DECL g_pp_tit_off : buf<32, int<64>> = null
+DECL g_pp_tit_len : buf<32, int<64>> = null
+DECL g_pp_aut_off : buf<32, int<64>> = null
+DECL g_pp_aut_len : buf<32, int<64>> = null
+DECL g_pp_jrn_off : buf<32, int<64>> = null
+DECL g_pp_jrn_len : buf<32, int<64>> = null
+DECL g_pp_doi_off : buf<32, int<64>> = null
+DECL g_pp_doi_len : buf<32, int<64>> = null
+DECL g_pp_pmid_off: buf<32, int<64>> = null
+DECL g_pp_pmid_len: buf<32, int<64>> = null
+DECL g_pp_year    : buf<32, int<64>> = null
+DECL g_pp_cites   : buf<32, int<64>> = null
+DECL g_pp_hits    : buf<32, int<64>> = null
+DECL g_pp_oa      : buf<32, int<64>> = null
+DECL g_pp_matched : buf<32, int<64>> = null
+DECL g_pp_ref_n   : int<64> = 0
+DECL g_pp_ref_ok  : int<64> = 0
+
+# ---- literature attention per gene
+DECL g_pp_gene     : buf<64, int<64>> = null
+DECL g_pp_gene_n   : int<64> = 0
+DECL g_pp_gene_max : int<64> = 0
+DECL g_pp_gene_tot : int<64> = 0
+
+# ---- publication velocity
+DECL g_pp_vel     : buf<32, int<64>> = null
+DECL g_pp_vel_n   : int<64> = 0
+DECL g_pp_year0   : int<64> = 0
+
+DECL g_pp_ret_off : int<64> = 0
+DECL g_pp_ret_len : int<64> = 0
+
+# ---------------------------------------------------------------------------
+# one reference record
+# ---------------------------------------------------------------------------
+FUNC pp_read_ref(b : buf<>, cur : int<64>, n : int<64>, i : int<64>) : int<64> {
+    DECL v : int<64> = pj_val(b, cur, n, strbuf("matched"))
+    IF v < 0 {
+        RETURN -1
+    }
+    g_pp_matched[i] = pj_int(b, v, n)
+    g_pp_hits[i] = pj_int_of(b, pj_end, n, strbuf("hits"))
+    DECL vp : int<64> = pj_val(b, pj_end, n, strbuf("pmid"))
+    pj_str(b, vp, n)
+    g_pp_pmid_off[i] = pj_str_off
+    g_pp_pmid_len[i] = pj_str_len
+    DECL vd : int<64> = pj_val(b, pj_end, n, strbuf("doi"))
+    pj_str(b, vd, n)
+    g_pp_doi_off[i] = pj_str_off
+    g_pp_doi_len[i] = pj_str_len
+    DECL vt : int<64> = pj_val(b, pj_end, n, strbuf("title"))
+    pj_str(b, vt, n)
+    g_pp_tit_off[i] = pj_str_off
+    g_pp_tit_len[i] = pj_str_len
+    DECL va : int<64> = pj_val(b, pj_end, n, strbuf("first_author"))
+    pj_str(b, va, n)
+    g_pp_aut_off[i] = pj_str_off
+    g_pp_aut_len[i] = pj_str_len
+    DECL vj : int<64> = pj_val(b, pj_end, n, strbuf("journal"))
+    pj_str(b, vj, n)
+    g_pp_jrn_off[i] = pj_str_off
+    g_pp_jrn_len[i] = pj_str_len
+    g_pp_year[i] = pj_int_of(b, pj_end, n, strbuf("year"))
+    g_pp_cites[i] = pj_int_of(b, pj_end, n, strbuf("cites"))
+    g_pp_oa[i] = pj_int_of(b, pj_end, n, strbuf("open_access"))
+    DECL vk : int<64> = pj_val(b, pj_end, n, strbuf("key"))
+    pj_str(b, vk, n)
+    g_pp_key_off[i] = pj_str_off
+    g_pp_key_len[i] = pj_str_len
+    DECL vb : int<64> = pj_val(b, pj_end, n, strbuf("backs"))
+    pj_str(b, vb, n)
+    g_pp_bak_off[i] = pj_str_off
+    g_pp_bak_len[i] = pj_str_len
+    RETURN pj_end
+}
+
+FUNC pp_read_refs(b : buf<>, from : int<64>, n : int<64>) : int<64> {
+    DECL cur : int<64> = from
+    DECL i : int<64> = 0
+    g_pp_ref_ok = 0
+    WHILE i < g_pp_ref_n {
+        cur = pp_read_ref(b, cur, n, i)
+        IF cur < 0 {
+            i = g_pp_ref_n
+        } ELSE {
+            g_pp_ref_ok = g_pp_ref_ok + g_pp_matched[i]
+            i = i + 1
+        }
+    }
+    RETURN g_pp_ref_ok
+}
+
+FUNC pp_read_genes(b : buf<>, from : int<64>, n : int<64>) : int<64> {
+    DECL cur : int<64> = from
+    DECL k : int<64> = 0
+    g_pp_gene_tot = 0
+    g_pp_gene_max = 0
+    WHILE k < g_pp_gene_n {
+        DECL vi : int<64> = pj_val(b, cur, n, strbuf("index"))
+        IF vi < 0 {
+            k = g_pp_gene_n
+        } ELSE {
+            DECL idx : int<64> = pj_int(b, vi, n)
+            DECL c : int<64> = pj_int_of(b, pj_end, n, strbuf("count"))
+            IF idx >= 0 {
+                IF idx < PP_MAXG {
+                    g_pp_gene[idx] = c
+                    g_pp_gene_tot = g_pp_gene_tot + c
+                    IF c > g_pp_gene_max {
+                        g_pp_gene_max = c
+                    }
+                }
+            }
+            cur = pj_end
+            k = k + 1
+        }
+    }
+    RETURN g_pp_gene_tot
+}
+
+FUNC pp_read_velocity(b : buf<>, from : int<64>, n : int<64>) : int<64> {
+    DECL cur : int<64> = from
+    DECL i : int<64> = 0
+    WHILE i < g_pp_vel_n {
+        DECL vy : int<64> = pj_val(b, cur, n, strbuf("year"))
+        IF vy < 0 {
+            i = g_pp_vel_n
+        } ELSE {
+            pj_int(b, vy, n)
+            g_pp_vel[i] = pj_int_of(b, pj_end, n, strbuf("count"))
+            cur = pj_end
+            i = i + 1
+        }
+    }
+    RETURN g_pp_vel_n
+}
+
+# ---------------------------------------------------------------------------
+# Load the evidence base.  Returns the number of references, 0 on failure.
+# ---------------------------------------------------------------------------
+FUNC papers_load(path : buf<>) : int<64> {
+    g_pp_src = load(path)
+    DECL n : int<64> = len(g_pp_src)
+    g_pp_loaded = 0
+    IF n < 32 {
+        RETURN 0
+    }
+    DECL b : buf<> = g_pp_src
+    DECL vr : int<64> = pj_val(b, 0, n, strbuf("retrieved"))
+    IF vr >= 0 {
+        pj_str(b, vr, n)
+        g_pp_ret_off = pj_str_off
+        g_pp_ret_len = pj_str_len
+    }
+    g_pp_ref_n = pj_int_of(b, 0, n, strbuf("n_refs"))
+    g_pp_gene_n = pj_int_of(b, 0, n, strbuf("n_genes"))
+    g_pp_vel_n = pj_int_of(b, 0, n, strbuf("n_years"))
+    g_pp_year0 = pj_int_of(b, 0, n, strbuf("year0"))
+    IF g_pp_ref_n > PP_MAXR {
+        g_pp_ref_n = PP_MAXR
+    }
+    IF g_pp_gene_n > PP_MAXG {
+        g_pp_gene_n = PP_MAXG
+    }
+    IF g_pp_vel_n > PP_MAXY {
+        g_pp_vel_n = PP_MAXY
+    }
+    DECL rs : int<64> = pj_val(b, 0, n, strbuf("refs"))
+    IF rs > 0 {
+        pp_read_refs(b, rs, n)
+    }
+    DECL gs : int<64> = pj_val(b, 0, n, strbuf("genes"))
+    IF gs > 0 {
+        pp_read_genes(b, gs, n)
+    }
+    DECL vs : int<64> = pj_val(b, 0, n, strbuf("velocity"))
+    IF vs > 0 {
+        pp_read_velocity(b, vs, n)
+    }
+    g_pp_loaded = 1
+    RETURN g_pp_ref_n
+}
+
+# ---------------------------------------------------------------------------
+# accessors
+# ---------------------------------------------------------------------------
+FUNC pp_key(i : int<64>) : buf<> {
+    RETURN slice(g_pp_src, g_pp_key_off[i], g_pp_key_len[i])
+}
+
+FUNC pp_backs(i : int<64>) : buf<> {
+    RETURN slice(g_pp_src, g_pp_bak_off[i], g_pp_bak_len[i])
+}
+
+FUNC pp_title(i : int<64>) : buf<> {
+    RETURN slice(g_pp_src, g_pp_tit_off[i], g_pp_tit_len[i])
+}
+
+FUNC pp_author(i : int<64>) : buf<> {
+    RETURN slice(g_pp_src, g_pp_aut_off[i], g_pp_aut_len[i])
+}
+
+FUNC pp_journal(i : int<64>) : buf<> {
+    RETURN slice(g_pp_src, g_pp_jrn_off[i], g_pp_jrn_len[i])
+}
+
+# journal name clipped to fit a fixed-width column
+FUNC pp_journal_short(i : int<64>, w : int<64>) : buf<> {
+    DECL n : int<64> = g_pp_jrn_len[i]
+    IF n > w {
+        n = w
+    }
+    RETURN slice(g_pp_src, g_pp_jrn_off[i], n)
+}
+
+FUNC pp_doi(i : int<64>) : buf<> {
+    RETURN slice(g_pp_src, g_pp_doi_off[i], g_pp_doi_len[i])
+}
+
+FUNC pp_pmid(i : int<64>) : buf<> {
+    RETURN slice(g_pp_src, g_pp_pmid_off[i], g_pp_pmid_len[i])
+}
+
+FUNC pp_retrieved() : buf<> {
+    RETURN slice(g_pp_src, g_pp_ret_off, g_pp_ret_len)
+}
+
+# total citations carried by the evidence base
+FUNC pp_total_citations() : int<64> {
+    DECL s : int<64> = 0
+    DECL i : int<64> = 0
+    WHILE i < g_pp_ref_n {
+        s = s + g_pp_cites[i]
+        i = i + 1
+    }
+    RETURN s
+}
+
+FUNC pp_oldest_year() : int<64> {
+    DECL y : int<64> = 9999
+    DECL i : int<64> = 0
+    WHILE i < g_pp_ref_n {
+        IF g_pp_year[i] > 0 {
+            IF g_pp_year[i] < y {
+                y = g_pp_year[i]
+            }
+        }
+        i = i + 1
+    }
+    RETURN y
+}
+
+FUNC pp_median_citations() : float<64> {
+    IF g_pp_ref_n == 0 {
+        RETURN 0.0
+    }
+    RETURN oc_div(pp_total_citations(), g_pp_ref_n)
+}
+
+# least-squares slope of the publications-per-year curve
+FUNC pp_velocity_slope() : float<64> {
+    DECL n : int<64> = g_pp_vel_n
+    IF n < 3 {
+        RETURN 0.0
+    }
+    DECL sx : float<64> = 0.0
+    DECL sy : float<64> = 0.0
+    DECL sxy : float<64> = 0.0
+    DECL sxx : float<64> = 0.0
+    DECL i : int<64> = 0
+    WHILE i < n {
+        DECL x : float<64> = i
+        DECL y : float<64> = g_pp_vel[i]
+        sx = sx + x
+        sy = sy + y
+        sxy = sxy + x * y
+        sxx = sxx + x * x
+        i = i + 1
+    }
+    DECL den : float<64> = n * sxx - sx * sx
+    IF oc_fabs(den) < OC_EPS {
+        RETURN 0.0
+    }
+    RETURN (n * sxy - sx * sy) / den
+}
+
+FUNC pp_velocity_cagr() : float<64> {
+    IF g_pp_vel_n < 2 {
+        RETURN 0.0
+    }
+    DECL first : float<64> = g_pp_vel[0]
+    DECL last : float<64> = g_pp_vel[g_pp_vel_n - 1]
+    IF first < 1.0 {
+        RETURN 0.0
+    }
+    RETURN pow(last / first, 1.0 / (g_pp_vel_n - 1)) - 1.0
+}
+
+FUNC pp_gene_norm(i : int<64>) : float<64> {
+    IF g_pp_gene_max == 0 {
+        RETURN 0.0
+    }
+    RETURN oc_div(g_pp_gene[i], g_pp_gene_max)
+}
+
+# how much of the platform is backed by a verified citation
+FUNC pp_coverage() : float<64> {
+    IF g_pp_ref_n == 0 {
+        RETURN 0.0
+    }
+    RETURN oc_div(g_pp_ref_ok, g_pp_ref_n)
+}

@@ -1,0 +1,125 @@
+# ============================================================================
+# oncopattern/simulation/cell_growth.tech — tumour growth kinetics.
+#
+# Two ODE models integrated with classical RK4 from the TECH scientific
+# engine (unvm/engines/scientific/ode.tech).  The derivative is supplied BY
+# NAME and dispatched through the call_fn(fn_id(name), 0) trampoline — the
+# single-pass compiler's legal forward-call mechanism.
+#
+#   logistic:  dN/dt = r N (1 - N/K)
+#   Gompertz:  dN/dt = r N ln(K/N)          (better late-stage plateau fit)
+#
+# Both write a timeseries into g_ts_* for the visualiser, and report the
+# goodness of fit (R^2) against the observed volume series.
+#
+# META @module(name:sim_growth, provides:growth_run, requires:ode,sim_params)
+# ============================================================================
+
+IMPORT oncopattern/simulation/params
+IMPORT unvm/engines/scientific/ode
+
+DECL OC_TS_MAX : int<64> = 512
+DECL g_ts_t    : buf<512, float<64>> = null    # time axis (days)
+DECL g_ts_n    : buf<512, float<64>> = null    # cell count / volume
+DECL g_ts_len  : int<64> = 0
+
+DECL gr_r : float<64> = 0.03
+DECL gr_K : float<64> = 10000000000.0
+
+# ---- derivative callbacks (read g_ode_y, write g_ode_dy) -------------------
+FUNC growth_logistic_dy(dummy : int<64>) : int<64> {
+    DECL N : float<64> = g_ode_y[0]
+    g_ode_dy[0] = gr_r * N * (1.0 - N / gr_K)
+    RETURN 0
+}
+
+FUNC growth_gompertz_dy(dummy : int<64>) : int<64> {
+    DECL N : float<64> = g_ode_y[0]
+    IF N < 1.0 {
+        N = 1.0
+    }
+    g_ode_dy[0] = gr_r * N * log(gr_K / N)
+    RETURN 0
+}
+
+# ---------------------------------------------------------------------------
+# Run `steps` RK4 steps of size h and record the trajectory.
+# model: 0 = logistic, 1 = Gompertz
+# ---------------------------------------------------------------------------
+FUNC growth_run(model : int<64>, steps : int<64>, h : float<64>) : float<64> {
+    gr_r = p_growth_r[g_ct]
+    gr_K = p_growth_K[g_ct]
+    IF model == 1 {
+        # the Gompertz rate constant is defined against ln(K/N0)
+        gr_r = p_growth_r[g_ct] * 0.25
+    }
+    g_ode_n = 1
+    g_ode_t = 0.0
+    g_ode_y[0] = p_growth_N0[g_ct]
+    IF steps > OC_TS_MAX {
+        steps = OC_TS_MAX
+    }
+    g_ts_len = 0
+    DECL s : int<64> = 0
+    WHILE s < steps {
+        g_ts_t[g_ts_len] = g_ode_t
+        g_ts_n[g_ts_len] = g_ode_y[0]
+        g_ts_len = g_ts_len + 1
+        IF model == 1 {
+            rk4_step(strbuf("growth_gompertz_dy"), h)
+        } ELSE {
+            rk4_step(strbuf("growth_logistic_dy"), h)
+        }
+        s = s + 1
+    }
+    RETURN g_ode_y[0]
+}
+
+# closed-form logistic solution, used as the convergence oracle
+FUNC growth_logistic_exact(t : float<64>) : float<64> {
+    DECL N0 : float<64> = p_growth_N0[g_ct]
+    DECL K : float<64> = p_growth_K[g_ct]
+    DECL r : float<64> = p_growth_r[g_ct]
+    RETURN K / (1.0 + ((K - N0) / N0) * exp(0.0 - r * t))
+}
+
+# R^2 of the recorded trajectory against the closed-form solution
+FUNC growth_r2() : float<64> {
+    IF g_ts_len < 2 {
+        RETURN 0.0
+    }
+    DECL mean : float<64> = 0.0
+    DECL i : int<64> = 0
+    WHILE i < g_ts_len {
+        mean = mean + growth_logistic_exact(g_ts_t[i])
+        i = i + 1
+    }
+    mean = oc_div(mean, g_ts_len)
+    DECL ss_res : float<64> = 0.0
+    DECL ss_tot : float<64> = 0.0
+    i = 0
+    WHILE i < g_ts_len {
+        DECL obs : float<64> = growth_logistic_exact(g_ts_t[i])
+        DECL d1 : float<64> = g_ts_n[i] - obs
+        DECL d2 : float<64> = obs - mean
+        ss_res = ss_res + d1 * d1
+        ss_tot = ss_tot + d2 * d2
+        i = i + 1
+    }
+    RETURN 1.0 - oc_div(ss_res, ss_tot + OC_EPS)
+}
+
+# doubling time in days at the current population
+FUNC growth_doubling_time() : float<64> {
+    DECL N : float<64> = g_ode_y[0]
+    DECL rate : float<64> = gr_r * (1.0 - N / gr_K)
+    IF rate < OC_EPS {
+        RETURN 0.0
+    }
+    RETURN log(2.0) / rate
+}
+
+# tumour volume in cm3 from a cell count (1e9 cells ~ 1 cm3)
+FUNC growth_volume_cm3(cells : float<64>) : float<64> {
+    RETURN cells / 1000000000.0
+}

@@ -1,0 +1,166 @@
+# ============================================================================
+# oncopattern/pattern/log.tech — crash-consistent pattern logging.
+#
+# Every detected pattern is persisted twice:
+#
+#   1. into the journaling filesystem (stdlib/fs.tech) as a fixed-width
+#      record, so a power failure mid-write can never leave a torn entry —
+#      fs_mount replays committed journal entries and discards uncommitted
+#      ones on the next start;
+#   2. into a human-readable append-only text journal, which is what the
+#      report layer and the operator actually read.
+#
+# The filesystem is v1-limited to 15 files of 64 bytes, so the FS holds one
+# compact record per pattern (id, grade, score, checksum) while the full text
+# lives in the text journal.
+#
+# META @module(name:pat_log, provides:log_patterns, requires:fs,pat_classify)
+# ============================================================================
+
+IMPORT oncopattern/pattern/classify
+IMPORT stdlib/fs
+
+DECL LOG_MAX      : int<64> = 65536
+DECL g_log        : buf<65536> = null      # the text journal
+DECL g_log_len    : int<64> = 0
+DECL g_log_n      : int<64> = 0            # records written
+DECL g_log_fs_n   : int<64> = 0            # records that reached the FS
+DECL g_log_rec    : buf<64> = null         # the 64-byte FS record
+DECL g_log_name   : buf<64> = null
+DECL g_log_session : int<64> = 0
+
+FUNC log_reset(session : int<64>) {
+    g_log_len = 0
+    g_log_n = 0
+    g_log_fs_n = 0
+    g_log_session = session
+    g_log_len = oc_cat(g_log, g_log_len, strbuf("# OncoPattern pattern journal — session "))
+    g_log_len = oc_cati(g_log, g_log_len, session)
+    g_log_len = oc_nl(g_log, g_log_len)
+    g_log_len = oc_cat(g_log, g_log_len, strbuf("# ts_ms  category  pattern  score  unit  grade  conf  loc  sha8\n"))
+}
+
+# mount (or create) the pattern volume
+FUNC log_fs_open(path : buf<>) : int<64> {
+    DECL r : int<64> = fs_mount(path)
+    IF r < 0 {
+        RETURN fs_init(path)
+    }
+    RETURN r
+}
+
+# format a fresh volume, discarding anything already on it
+FUNC log_fs_format(path : buf<>) : int<64> {
+    RETURN fs_init(path)
+}
+
+# Build the compact FS record: "<id>|<grade>|<score>|<sha8>"
+FUNC log_fs_record(id : int<64>) : int<64> {
+    DECL n : int<64> = 0
+    n = oc_cati(g_log_rec, n, id)
+    n = oc_catb(g_log_rec, n, 124)
+    n = oc_cati(g_log_rec, n, g_pat_grade[id])
+    n = oc_catb(g_log_rec, n, 124)
+    n = oc_catf(g_log_rec, n, g_pat_score[id], 4)
+    n = oc_catb(g_log_rec, n, 124)
+    n = oc_catf(g_log_rec, n, g_pat_conf[id], 2)
+    IF n > 63 {
+        n = 63
+    }
+    RETURN n
+}
+
+# file name for a pattern record: "p<id>"
+FUNC log_fs_name(id : int<64>) : int<64> {
+    DECL n : int<64> = 0
+    n = oc_catb(g_log_name, n, 112)
+    n = oc_cati(g_log_name, n, id)
+    RETURN n
+}
+
+# Append one pattern to both journals.  Returns 1 if the FS write committed.
+FUNC log_pattern(id : int<64>) : int<64> {
+    DECL ts : int<64> = sys_ms()
+    DECL s : int<64> = g_log_len
+    g_log_len = oc_cati(g_log, g_log_len, ts)
+    g_log_len = oc_pad(g_log, g_log_len, s, 16)
+    g_log_len = oc_cat(g_log, g_log_len, pat_category_name(pat_category(id)))
+    g_log_len = oc_pad(g_log, g_log_len, s, 32)
+    g_log_len = oc_cat(g_log, g_log_len, pat_name(id))
+    g_log_len = oc_pad(g_log, g_log_len, s, 56)
+    g_log_len = oc_catf(g_log, g_log_len, g_pat_score[id], 4)
+    g_log_len = oc_pad(g_log, g_log_len, s, 76)
+    g_log_len = oc_cat(g_log, g_log_len, pat_unit(id))
+    g_log_len = oc_pad(g_log, g_log_len, s, 96)
+    g_log_len = oc_cat(g_log, g_log_len, grade_name(g_pat_grade[id]))
+    g_log_len = oc_pad(g_log, g_log_len, s, 108)
+    g_log_len = oc_catf(g_log, g_log_len, g_pat_conf[id], 2)
+    g_log_len = oc_pad(g_log, g_log_len, s, 116)
+    g_log_len = oc_cati(g_log, g_log_len, g_pat_loc[id])
+    g_log_len = oc_catb(g_log, g_log_len, 47)
+    g_log_len = oc_cati(g_log, g_log_len, g_pat_loc2[id])
+    g_log_len = oc_pad(g_log, g_log_len, s, 132)
+    # per-record integrity hash over the record's own bytes
+    g_log_len = oc_cat(g_log, g_log_len, oc_hex8(slice(g_log, s, g_log_len - s)))
+    g_log_len = oc_nl(g_log, g_log_len)
+    g_log_n = g_log_n + 1
+
+    # ---- write-ahead journalled copy
+    DECL rn : int<64> = log_fs_record(id)
+    DECL nn : int<64> = log_fs_name(id)
+    DECL rc : int<64> = fs_create(slice(g_log_name, 0, nn), slice(g_log_rec, 0, rn))
+    IF rc == 0 {
+        g_log_fs_n = g_log_fs_n + 1
+        RETURN 1
+    }
+    RETURN 0
+}
+
+# Log every detected pattern.  Returns the number of records written.
+FUNC log_patterns() : int<64> {
+    DECL i : int<64> = 0
+    WHILE i < OC_NPAT {
+        IF g_pat_detected[i] == 1 {
+            log_pattern(i)
+        }
+        i = i + 1
+    }
+    RETURN g_log_n
+}
+
+FUNC log_save(path : buf<>) : int<64> {
+    save(path, slice(g_log, 0, g_log_len))
+    RETURN g_log_len
+}
+
+# read a pattern record back out of the journalling filesystem
+FUNC log_fs_read(id : int<64>, out : buf<>) : int<64> {
+    DECL nn : int<64> = log_fs_name(id)
+    RETURN fs_read(slice(g_log_name, 0, nn), out)
+}
+
+FUNC log_fs_count() : int<64> {
+    RETURN fs_count()
+}
+
+# ---------------------------------------------------------------------------
+# Crash-consistency drill (plan §10.3).
+#
+# fs_write_upto stops the write-ahead sequence at `stage`:
+#   1 = journal entry appended but NOT committed -> recovery must roll back
+#   2 = entry committed but not checkpointed     -> recovery must redo it
+# The record must already exist, so the drill creates it first when needed.
+# ---------------------------------------------------------------------------
+FUNC log_crash_write(id : int<64>, payload : buf<>, stage : int<64>) : int<64> {
+    DECL nn : int<64> = log_fs_name(id)
+    DECL nm : buf<> = slice(g_log_name, 0, nn)
+    IF fs_stat(nm) < 0 {
+        fs_create(nm, payload)
+    }
+    RETURN fs_write_upto(nm, payload, stage)
+}
+
+FUNC log_crash_drill(id : int<64>, stage : int<64>) : int<64> {
+    DECL rn : int<64> = log_fs_record(id)
+    RETURN log_crash_write(id, slice(g_log_rec, 0, rn), stage)
+}

@@ -1,0 +1,129 @@
+# ============================================================================
+# oncopattern/gui/layout.tech — grid / stack layout engine.
+#
+# Computes rectangles; it never draws.  A layout is a stack of frames, each
+# frame either a row-stack, a column-stack, or an n x m grid, with padding and
+# gaps.  lay_next() carves the next child rect out of the active frame — the
+# same discipline as a flexbox row, done with integer arithmetic.
+#
+# META @module(name:gui_layout, provides:lay_*, requires:gui_theme)
+# ============================================================================
+
+IMPORT oncopattern/gui/theme
+
+DECL LAY_ROW  : int<64> = 0
+DECL LAY_COL  : int<64> = 1
+DECL LAY_GRID : int<64> = 2
+
+DECL lay_kind : buf<16, int<64>> = null
+DECL lay_x    : buf<16, int<64>> = null
+DECL lay_y    : buf<16, int<64>> = null
+DECL lay_w    : buf<16, int<64>> = null
+DECL lay_h    : buf<16, int<64>> = null
+DECL lay_cur  : buf<16, int<64>> = null      # cursor along the main axis
+DECL lay_gap  : buf<16, int<64>> = null
+DECL lay_cols : buf<16, int<64>> = null
+DECL lay_idx  : buf<16, int<64>> = null      # child counter (grid)
+DECL lay_sp   : int<64> = 0                  # stack pointer
+
+# results of the last lay_next()
+DECL rx : int<64> = 0
+DECL ry : int<64> = 0
+DECL rw : int<64> = 0
+DECL rh : int<64> = 0
+
+FUNC lay_push(kind : int<64>, x : int<64>, y : int<64>, w : int<64>, h : int<64>, gap : int<64>, cols : int<64>) : int<64> {
+    IF lay_sp >= 16 {
+        RETURN -1
+    }
+    lay_kind[lay_sp] = kind
+    lay_x[lay_sp] = x
+    lay_y[lay_sp] = y
+    lay_w[lay_sp] = w
+    lay_h[lay_sp] = h
+    lay_cur[lay_sp] = 0
+    lay_gap[lay_sp] = gap
+    lay_cols[lay_sp] = cols
+    lay_idx[lay_sp] = 0
+    lay_sp = lay_sp + 1
+    RETURN lay_sp - 1
+}
+
+FUNC lay_pop() : int<64> {
+    IF lay_sp > 0 {
+        lay_sp = lay_sp - 1
+    }
+    RETURN lay_sp
+}
+
+FUNC lay_reset() {
+    lay_sp = 0
+}
+
+# Carve the next child.  `size` is the extent along the main axis (rows: the
+# width, columns: the height); ignored for grids, which divide evenly.
+FUNC lay_next(size : int<64>) : int<64> {
+    IF lay_sp == 0 {
+        RETURN 0
+    }
+    DECL f : int<64> = lay_sp - 1
+    DECL k : int<64> = lay_kind[f]
+    IF k == LAY_ROW {
+        rx = lay_x[f] + lay_cur[f]
+        ry = lay_y[f]
+        rw = size
+        rh = lay_h[f]
+        lay_cur[f] = lay_cur[f] + size + lay_gap[f]
+        RETURN 1
+    }
+    IF k == LAY_COL {
+        rx = lay_x[f]
+        ry = lay_y[f] + lay_cur[f]
+        rw = lay_w[f]
+        rh = size
+        lay_cur[f] = lay_cur[f] + size + lay_gap[f]
+        RETURN 1
+    }
+    # grid
+    DECL cols : int<64> = lay_cols[f]
+    IF cols < 1 {
+        cols = 1
+    }
+    DECL idx : int<64> = lay_idx[f]
+    DECL cw : int<64> = (lay_w[f] - (cols - 1) * lay_gap[f]) //// cols
+    DECL rowsn : int<64> = 2
+    IF size > 0 {
+        rowsn = size
+    }
+    DECL chh : int<64> = (lay_h[f] - (rowsn - 1) * lay_gap[f]) //// rowsn
+    rx = lay_x[f] + (idx % cols) * (cw + lay_gap[f])
+    ry = lay_y[f] + (idx //// cols) * (chh + lay_gap[f])
+    rw = cw
+    rh = chh
+    lay_idx[f] = idx + 1
+    RETURN 1
+}
+
+# remaining extent along the main axis of the active frame
+FUNC lay_remaining() : int<64> {
+    IF lay_sp == 0 {
+        RETURN 0
+    }
+    DECL f : int<64> = lay_sp - 1
+    IF lay_kind[f] == LAY_ROW {
+        RETURN lay_w[f] - lay_cur[f]
+    }
+    RETURN lay_h[f] - lay_cur[f]
+}
+
+FUNC lay_inset(pad : int<64>) {
+    IF lay_sp == 0 {
+        RETURN 0
+    }
+    DECL f : int<64> = lay_sp - 1
+    lay_x[f] = lay_x[f] + pad
+    lay_y[f] = lay_y[f] + pad
+    lay_w[f] = lay_w[f] - pad * 2
+    lay_h[f] = lay_h[f] - pad * 2
+    RETURN 1
+}

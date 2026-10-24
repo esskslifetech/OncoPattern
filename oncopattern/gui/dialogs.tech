@@ -1,0 +1,117 @@
+# ============================================================================
+# oncopattern/gui/dialogs.tech — modal dialogs.
+#
+# File-open, confirm, and parameter-entry, drawn as a dimmed backdrop plus a
+# centred panel.  Modality is a flag the window manager checks before routing
+# events, so a dialog swallows input without a second event loop.
+#
+# META @module(name:gui_dialogs, provides:dlg_*, requires:gui_input)
+# ============================================================================
+
+IMPORT oncopattern/gui/input
+
+DECL DLG_NONE    : int<64> = 0
+DECL DLG_OPEN    : int<64> = 1
+DECL DLG_CONFIRM : int<64> = 2
+DECL DLG_PARAMS  : int<64> = 3
+DECL DLG_ABOUT   : int<64> = 4
+
+DECL dlg_active : int<64> = 0
+DECL dlg_sel    : int<64> = 0
+DECL dlg_result : int<64> = -1
+DECL dlg_files  : buf<512> = null
+DECL dlg_off    : buf<16, int<64>> = null
+DECL dlg_len    : buf<16, int<64>> = null
+DECL dlg_n      : int<64> = 0
+DECL dlg_title  : buf<128> = null
+DECL dlg_title_n : int<64> = 0
+
+FUNC dlg_add_file(name : buf<>) : int<64> {
+    IF dlg_n >= 12 {
+        RETURN -1
+    }
+    DECL at : int<64> = 0
+    IF dlg_n > 0 {
+        at = dlg_off[dlg_n - 1] + dlg_len[dlg_n - 1]
+    }
+    dlg_off[dlg_n] = at
+    dlg_len[dlg_n] = len(name)
+    oc_cat(dlg_files, at, name)
+    dlg_n = dlg_n + 1
+    RETURN dlg_n
+}
+
+FUNC dlg_open(kind : int<64>, title : buf<>) {
+    dlg_active = kind
+    dlg_sel = 0
+    dlg_result = -1
+    dlg_title_n = 0
+    dlg_title_n = oc_cat(dlg_title, dlg_title_n, title)
+}
+
+FUNC dlg_close(result : int<64>) {
+    dlg_result = result
+    dlg_active = DLG_NONE
+}
+
+# dim the frame behind the dialog (cheap 50% darken)
+FUNC dlg_backdrop() {
+    DECL i : int<64> = 0
+    WHILE i < FB_N {
+        g_fb[i] = g_fb[i] //// 2
+        i = i + 1
+    }
+}
+
+FUNC dlg_draw() : int<64> {
+    IF dlg_active == DLG_NONE {
+        RETURN 0
+    }
+    dlg_backdrop()
+    DECL w : int<64> = 340
+    DECL h : int<64> = 200
+    IF dlg_active == DLG_CONFIRM {
+        h = 120
+    }
+    DECL x : int<64> = (FB_W - w) //// 2
+    DECL y : int<64> = (FB_H - h) //// 2
+    theme_panel(x, y, w, h, slice(dlg_title, 0, dlg_title_n))
+
+    IF dlg_active == DLG_OPEN {
+        DECL i : int<64> = 0
+        WHILE i < dlg_n {
+            DECL ry2 : int<64> = y + 24 + i * TH_ROWH
+            IF i == dlg_sel {
+                fb_rect(x + 6, ry2 - 2, w - 12, TH_ROWH, 40, 62, 88)
+            }
+            fb_text(x + 14, ry2 + 2, slice(dlg_files, dlg_off[i], dlg_len[i]), 1, TH_TEXT_R, TH_TEXT_G, TH_TEXT_B)
+            i = i + 1
+        }
+    }
+    IF dlg_active == DLG_CONFIRM {
+        fb_text(x + 14, y + 34, strbuf("DISCARD THE CURRENT SESSION?"), 1, TH_TEXT_R, TH_TEXT_G, TH_TEXT_B)
+    }
+    IF dlg_active == DLG_PARAMS {
+        fb_text(x + 14, y + 26, strbuf("SIMULATION PARAMETERS"), 1, TH_DIM_R, TH_DIM_G, TH_DIM_B)
+        fb_text(x + 14, y + 44, strbuf("STEPS"), 1, TH_TEXT_R, TH_TEXT_G, TH_TEXT_B)
+        fb_text(x + 14, y + 62, strbuf("DT"), 1, TH_TEXT_R, TH_TEXT_G, TH_TEXT_B)
+        fb_text(x + 14, y + 80, strbuf("CANCER TYPE"), 1, TH_TEXT_R, TH_TEXT_G, TH_TEXT_B)
+        fb_text(x + 14, y + 98, strbuf("DOSE MG/L"), 1, TH_TEXT_R, TH_TEXT_G, TH_TEXT_B)
+    }
+    IF dlg_active == DLG_ABOUT {
+        fb_text(x + 14, y + 28, strbuf("ONCOPATTERN 1.0"), 1, TH_ACC_R, TH_ACC_G, TH_ACC_B)
+        fb_text(x + 14, y + 44, strbuf("ESS KS LIFE TECH"), 1, TH_TEXT_R, TH_TEXT_G, TH_TEXT_B)
+        fb_text(x + 14, y + 58, strbuf("K-S (KANISHK-SONI)"), 1, TH_TEXT_R, TH_TEXT_G, TH_TEXT_B)
+        fb_text(x + 14, y + 76, strbuf("GITHUB.COM/ESSKSLIFETECH/ONCOPATTERN"), 1, TH_ACC_R, TH_ACC_G, TH_ACC_B)
+        fb_text(x + 14, y + 94, strbuf("WRITTEN ENTIRELY IN TECH"), 1, TH_DIM_R, TH_DIM_G, TH_DIM_B)
+        fb_text(x + 14, y + 108, strbuf("COMPILER.TECH / VM.TECH / TECHC"), 1, TH_DIM_R, TH_DIM_G, TH_DIM_B)
+    }
+    # buttons
+    fb_rect(x + w - 150, y + h - 30, 64, 20, TH_BAR_R, TH_BAR_G, TH_BAR_B)
+    fb_frame(x + w - 150, y + h - 30, 64, 20, TH_EDGE_R, TH_EDGE_G, TH_EDGE_B)
+    fb_text_c(x + w - 150, y + h - 24, 64, strbuf("CANCEL"), 1, TH_TEXT_R, TH_TEXT_G, TH_TEXT_B)
+    fb_rect(x + w - 78, y + h - 30, 64, 20, 34, 62, 88)
+    fb_frame(x + w - 78, y + h - 30, 64, 20, TH_ACC_R //// 2, TH_ACC_G //// 2, TH_ACC_B //// 2)
+    fb_text_c(x + w - 78, y + h - 24, 64, strbuf("OK"), 1, TH_TEXT_R, TH_TEXT_G, TH_TEXT_B)
+    RETURN 1
+}

@@ -1,0 +1,45 @@
+# smoke test of OncoPattern idioms
+DECL g_ts : buf<4096, float<64>> = null
+DECL g_out : buf<65536> = null
+
+FUNC bcat(dst : buf<>, at : int<64>, s : buf<>) : int<64> {
+    DECL i : int<64> = 0
+    DECL n : int<64> = len(s)
+    WHILE i < n {
+        dst[at + i] = s[i]
+        i = i + 1
+    }
+    RETURN at + n
+}
+FUNC itoa(v : int<64>) : buf<> {
+    DECL tmp : buf<> = strbuf("00000000000000000000")
+    IF v == 0 {
+        RETURN slice(strbuf("0"), 0, 1)
+    }
+    DECL neg : int<64> = 0
+    IF v < 0 {
+        neg = 1
+        v = 0 - v
+    }
+    DECL p : int<64> = 20
+    WHILE v > 0 {
+        p = p - 1
+        tmp[p] = 48 + (v % 10)
+        v = v //// 10
+    }
+    IF neg == 1 {
+        p = p - 1
+        tmp[p] = 45
+    }
+    RETURN slice(tmp, p, 20 - p)
+}
+DECL n : int<64> = 0
+n = bcat(g_out, n, strbuf("cells="))
+n = bcat(g_out, n, itoa(1234567))
+n = bcat(g_out, n, strbuf("\n"))
+g_ts[0] = 1.5
+g_ts[1] = g_ts[0] * 2.0
+save("/home/user/scratch/smoke_out.txt", slice(g_out, 0, n))
+YIELD g_ts[1]
+YIELD sqrt(16.0)
+YIELD n

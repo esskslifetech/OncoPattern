@@ -1,0 +1,68 @@
+# ============================================================================
+# oncopattern/report/generator.tech — the structured report builder.
+#
+# Fills the report record from the live analysis state, then drives the text
+# and HTML exporters.  Keeping the record separate from the renderers is what
+# lets the comparison engine diff two reports without re-running anything.
+#
+# META @module(name:rep_generator, provides:report_*, requires:rep_html)
+# ============================================================================
+
+IMPORT oncopattern/report/export_html
+
+# populate the record from the registry, simulation results and clinical CSV
+FUNC report_fill(patient : buf<>, label : buf<>, ct : int<64>, stage : int<64>, age : int<64>) : int<64> {
+    rep_patient_n = 0
+    rep_patient_n = oc_cat(rep_patient, rep_patient_n, patient)
+    rep_label_n = 0
+    rep_label_n = oc_cat(rep_label, rep_label_n, label)
+    rep_ct = ct
+    rep_stage = stage
+    rep_age = age
+    rep_ts = sys_ms()
+
+    rep_tmb       = g_pat_score[PAT_TMB_HIGH]
+    rep_msi       = g_pat_score[PAT_MSI_SHIFT]
+    rep_mut_count = g_var_n
+    rep_volume    = g_pat_score[PAT_GROWTH] / 1000000000.0
+    rep_growth    = p_growth_r[g_ct]
+    rep_immune    = g_pat_score[PAT_IMMUNE]
+    rep_vascular  = g_pat_score[PAT_ANGIOGENESIS]
+    rep_risk      = classify_risk_index()
+    rep_necrosis  = g_pat_score[PAT_NECROSIS]
+    rep_hypoxia   = g_hypoxic_frac
+    RETURN REP_NSTAT
+}
+
+# fill the record from the metadata captured at ingest time
+FUNC report_from_ingest(label : buf<>) : int<64> {
+    RETURN report_fill(slice(g_pid, 0, g_pid_n), label, g_pct, g_pstage, g_page)
+}
+
+# read the patient's row out of the clinical table, when it is still loaded
+FUNC report_from_clinical(row : int<64>) : int<64> {
+    IF row < 1 {
+        RETURN 0
+    }
+    IF row >= g_csv_rows {
+        RETURN 0
+    }
+    DECL k : int<64> = row * g_csv_cols
+    DECL ct : int<64> = ct_from_text(g_csv_src, g_csv_off[k + 1], g_csv_off[k + 1] + g_csv_len[k + 1])
+    DECL stage : int<64> = oc_cell_num(row, 2) //// 1
+    DECL age : int<64> = oc_cell_num(row, 3) //// 1
+    RETURN report_fill(oc_cell_txt(row, 0), strbuf("t0 baseline"), ct, stage, age)
+}
+
+# build + save both renderings; returns the text length
+FUNC report_emit(txt_path : buf<>, html_path : buf<>, with_comparison : int<64>, embed : int<64>) : int<64> {
+    txt_build(with_comparison)
+    txt_save(txt_path)
+    html_build(with_comparison, embed)
+    html_save(html_path)
+    RETURN txt_len
+}
+
+FUNC report_checksum() : buf<> {
+    RETURN txt_sha()
+}

@@ -1,0 +1,166 @@
+# ============================================================================
+# oncopattern/visualization/export_png.tech — raster export.
+#
+# The framebuffer is serialised to an uncompressed 24-bit BMP: a 14-byte file
+# header plus a 40-byte BITMAPINFOHEADER, then bottom-up rows padded to a
+# 4-byte boundary.  No compression means no dependency — the format is
+# written byte by byte in TECH and opens in any viewer.
+#
+# (The module keeps the plan's name; the emitted container is BMP, and
+# export_ppm writes the even simpler Netpbm form for pipeline round-trips.)
+#
+# META @module(name:vis_export_png, provides:export_bmp, requires:vis_renderer)
+# ============================================================================
+
+IMPORT oncopattern/visualization/renderer
+
+DECL bmp_buf : buf<1900000> = null
+DECL bmp_len : int<64> = 0
+
+FUNC bmp_u16(at : int<64>, v : int<64>) : int<64> {
+    bmp_buf[at] = v % 256
+    bmp_buf[at + 1] = (v //// 256) % 256
+    RETURN at + 2
+}
+
+FUNC bmp_u32(at : int<64>, v : int<64>) : int<64> {
+    bmp_buf[at] = v % 256
+    bmp_buf[at + 1] = (v //// 256) % 256
+    bmp_buf[at + 2] = (v //// 65536) % 256
+    bmp_buf[at + 3] = (v //// 16777216) % 256
+    RETURN at + 4
+}
+
+# Serialise the framebuffer region (0,0,w,h) as a BMP and save it.
+FUNC export_bmp_region(path : buf<>, w : int<64>, h : int<64>) : int<64> {
+    DECL rowbytes : int<64> = w * 3
+    DECL pad : int<64> = (4 - (rowbytes % 4)) % 4
+    DECL stride : int<64> = rowbytes + pad
+    DECL pixbytes : int<64> = stride * h
+    DECL off : int<64> = 54
+    DECL total : int<64> = off + pixbytes
+
+    # ---- BITMAPFILEHEADER
+    DECL at : int<64> = 0
+    bmp_buf[0] = 66                     # 'B'
+    bmp_buf[1] = 77                     # 'M'
+    at = 2
+    at = bmp_u32(at, total)
+    at = bmp_u16(at, 0)
+    at = bmp_u16(at, 0)
+    at = bmp_u32(at, off)
+    # ---- BITMAPINFOHEADER
+    at = bmp_u32(at, 40)                # header size
+    at = bmp_u32(at, w)
+    at = bmp_u32(at, h)
+    at = bmp_u16(at, 1)                 # planes
+    at = bmp_u16(at, 24)                # bits per pixel
+    at = bmp_u32(at, 0)                 # BI_RGB, no compression
+    at = bmp_u32(at, pixbytes)
+    at = bmp_u32(at, 2835)              # 72 dpi
+    at = bmp_u32(at, 2835)
+    at = bmp_u32(at, 0)
+    at = bmp_u32(at, 0)
+
+    # ---- pixel array, bottom-up, BGR
+    DECL y : int<64> = 0
+    WHILE y < h {
+        DECL srcy : int<64> = h - 1 - y
+        DECL x : int<64> = 0
+        WHILE x < w {
+            DECL k : int<64> = (srcy * FB_W + x) * 3
+            DECL o : int<64> = off + y * stride + x * 3
+            bmp_buf[o] = g_fb[k + 2]        # B
+            bmp_buf[o + 1] = g_fb[k + 1]    # G
+            bmp_buf[o + 2] = g_fb[k]        # R
+            x = x + 1
+        }
+        DECL p : int<64> = 0
+        WHILE p < pad {
+            bmp_buf[off + y * stride + rowbytes + p] = 0
+            p = p + 1
+        }
+        y = y + 1
+    }
+    bmp_len = total
+    save(path, slice(bmp_buf, 0, total))
+    RETURN total
+}
+
+FUNC export_bmp(path : buf<>) : int<64> {
+    RETURN export_bmp_region(path, FB_W, FB_H)
+}
+
+# checksum of the exported raster — the visualisation test certificate
+FUNC export_bmp_sha() : buf<> {
+    RETURN oc_hex8(slice(bmp_buf, 0, bmp_len))
+}
+
+# ---------------------------------------------------------------------------
+# Netpbm P6 export: 15-byte-ish ASCII header + raw RGB triples.
+# ---------------------------------------------------------------------------
+FUNC export_ppm(path : buf<>, w : int<64>, h : int<64>) : int<64> {
+    DECL at : int<64> = 0
+    at = oc_cat(bmp_buf, at, strbuf("P6\n"))
+    at = oc_cati(bmp_buf, at, w)
+    at = oc_catb(bmp_buf, at, 32)
+    at = oc_cati(bmp_buf, at, h)
+    at = oc_cat(bmp_buf, at, strbuf("\n255\n"))
+    DECL y : int<64> = 0
+    WHILE y < h {
+        DECL x : int<64> = 0
+        WHILE x < w {
+            DECL k : int<64> = (y * FB_W + x) * 3
+            bmp_buf[at] = g_fb[k]
+            bmp_buf[at + 1] = g_fb[k + 1]
+            bmp_buf[at + 2] = g_fb[k + 2]
+            at = at + 3
+            x = x + 1
+        }
+        y = y + 1
+    }
+    bmp_len = at
+    save(path, slice(bmp_buf, 0, at))
+    RETURN at
+}
+
+# base64 of the last exported raster, for inline <img> embedding in HTML
+DECL b64_tab : buf<> = null
+DECL b64_out : buf<2600000> = null
+
+FUNC b64_init() {
+    b64_tab = strbuf("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/")
+}
+
+FUNC export_base64(len_in : int<64>) : int<64> {
+    b64_init()
+    DECL i : int<64> = 0
+    DECL o : int<64> = 0
+    WHILE i + 2 < len_in {
+        DECL v : int<64> = bmp_buf[i] * 65536 + bmp_buf[i + 1] * 256 + bmp_buf[i + 2]
+        b64_out[o] = b64_tab[(v //// 262144) % 64]
+        b64_out[o + 1] = b64_tab[(v //// 4096) % 64]
+        b64_out[o + 2] = b64_tab[(v //// 64) % 64]
+        b64_out[o + 3] = b64_tab[v % 64]
+        o = o + 4
+        i = i + 3
+    }
+    DECL rem : int<64> = len_in - i
+    IF rem == 1 {
+        DECL v1 : int<64> = bmp_buf[i] * 65536
+        b64_out[o] = b64_tab[(v1 //// 262144) % 64]
+        b64_out[o + 1] = b64_tab[(v1 //// 4096) % 64]
+        b64_out[o + 2] = 61
+        b64_out[o + 3] = 61
+        o = o + 4
+    }
+    IF rem == 2 {
+        DECL v2 : int<64> = bmp_buf[i] * 65536 + bmp_buf[i + 1] * 256
+        b64_out[o] = b64_tab[(v2 //// 262144) % 64]
+        b64_out[o + 1] = b64_tab[(v2 //// 4096) % 64]
+        b64_out[o + 2] = b64_tab[(v2 //// 64) % 64]
+        b64_out[o + 3] = 61
+        o = o + 4
+    }
+    RETURN o
+}

@@ -1,0 +1,180 @@
+#!/usr/bin/env bash
+# ocbuild — OncoPattern build driver.
+#
+# `techc` resolves IMPORT paths from the TECH root, so the project tree has to
+# be visible from there while a build runs.  Staging is therefore TRANSIENT:
+# the tree is copied in, built, run, its outputs are copied back, and the
+# staged copies are removed again — so the TECH checkout is left exactly as it
+# was found.  Nothing of this project lives inside TECH between builds.
+#
+#   $TECH/oncopattern   <- copy of ./oncopattern   (source)
+#   $TECH/ocdata        <- copy of ./datasets      (inputs, read at runtime)
+#   $TECH/ocout         -> copied back to ./results (artefacts the program wrote)
+#
+# NOTE: the project uses dist/ and results/ rather than build/ and out/ —
+# directories with those two names are excluded from workspace snapshots, so
+# anything written there would silently fail to persist.
+#   $TECH/build         techc's own cache; our artefacts are copied to ./dist
+#                       and then removed from it again
+#
+# The staged layout makes the plan's documented commands work verbatim:
+#
+#     ./techc link oncopattern/config/boot.tech build/oncopattern.tech
+#     ./techc compile build/oncopattern.tech -o build/oncopattern.tbc
+#     ./techc package build/oncopattern.tech -o build/oncopattern.bin
+#
+# usage:
+#   ocbuild build   <module.tech> [name]   link + compile only
+#   ocbuild run     <module.tech> [name]   link + compile + run on the C machine
+#   ocbuild vm      <module.tech> [name]   same, but on the self-hosted vm.tech
+#   ocbuild package <module.tech> [name]   link + compile + self-contained binary
+#   ocbuild stage                          stage and LEAVE it (for manual techc)
+#   ocbuild unstage                        remove a manual staging
+set -e
+
+PROJ="$(cd "$(dirname "$0")/.." && pwd)"
+
+# Where is the TECH toolchain?  The build needs a TECH checkout it can stage
+# into, and a clone of this repository will not have one at a fixed relative
+# path.  Resolution order:
+#   1. $TECH_ROOT, if set                     (explicit wins)
+#   2. ../../TECH, ../TECH, ./TECH            (sibling checkouts)
+# A candidate counts only if it actually looks like TECH (a techc launcher).
+find_tech() {
+    local cand
+    for cand in "${TECH_ROOT:-}" "$PROJ/../../TECH" "$PROJ/../TECH" "$PROJ/TECH"; do
+        [ -n "$cand" ] || continue
+        if [ -f "$cand/techc" ]; then
+            ( cd "$cand" && pwd )
+            return 0
+        fi
+    done
+    return 1
+}
+
+if ! TECH="$(find_tech)"; then
+    echo "ocbuild: cannot find a TECH checkout." >&2
+    echo "ocbuild: set TECH_ROOT=/path/to/TECH, or clone the toolchain next to this repo:" >&2
+    echo "ocbuild:     git clone https://github.com/esskslifetech/TECH" >&2
+    exit 3
+fi
+
+# The C machine ships an optional tier-1 JIT that compiles a function after
+# ~100 calls.  On a program this size it miscompiles and corrupts the heap
+# ("realloc(): invalid pointer"), so we pin the reference interpreter path.
+# Verified: with the JIT off every certificate passes; the JIT is an
+# optimisation, not part of the language semantics.
+export TECH_NOTIER=1
+MACHINE="$TECH/bootstrap/stage0/vm"
+
+# $TECH/build is techc's OWN cache directory (CACHE="build" in techc; it holds
+# the compiled stage-1 compiler and linker).  It is never removed — only the
+# artefacts this project puts there are cleaned up again.
+BUILD_WAS_OURS=0
+
+# Workspace snapshots do not preserve the executable bit, and the TECH archive
+# itself ships techc without it.  Restore what we need before every build
+# rather than failing with "Permission denied" halfway through.
+ensure_exec() {
+    local f
+    for f in "$TECH/techc" "$TECH/bootstrap/stage0/stage0" \
+             "$TECH/bootstrap/stage0/vm" "$TECH/bootstrap/stage0/techbin"; do
+        [ -f "$f" ] && [ ! -x "$f" ] && chmod +x "$f"
+    done
+    return 0
+}
+
+stage() {
+    ensure_exec
+    rm -rf "$TECH/oncopattern"
+    cp -r "$PROJ/oncopattern" "$TECH/oncopattern"
+    mkdir -p "$TECH/ocdata" "$TECH/ocout" "$PROJ/results" "$PROJ/dist"
+    cp -r "$PROJ/datasets/." "$TECH/ocdata/"
+    mkdir -p "$TECH/build"      # techc's cache dir; created only if missing
+}
+
+collect() {   # copy everything the run produced back into the project
+    [ -d "$TECH/ocout" ] && cp -r "$TECH/ocout/." "$PROJ/results/" 2>/dev/null || true
+    return 0
+}
+
+unstage() {   # leave the TECH checkout exactly as we found it
+    rm -rf "$TECH/oncopattern" "$TECH/ocdata" "$TECH/ocout"
+    rmdir "$TECH/build" 2>/dev/null || true   # only succeeds if techc left it empty
+    return 0
+}
+
+link_compile() {   # $1 = source module (project-relative), $2 = artefact name
+    local src="oncopattern/$1" name="$2"
+    ( cd "$TECH" && bash techc link "$src" "build/${name}.tech" >/dev/null )
+    ( cd "$TECH" && bash techc compile "build/${name}.tech" -o "build/${name}.tbc" >/dev/null )
+    cp "$TECH/build/${name}.tech" "$PROJ/dist/${name}.tech"
+    cp "$TECH/build/${name}.tbc"  "$PROJ/dist/${name}.tbc"
+    local sz
+    sz=$(wc -c < "$TECH/build/${name}.tbc")
+    if [ "$sz" -lt 64 ]; then
+        echo "ocbuild: FAILED — ${name}.tbc is ${sz} bytes (compiler rejected the source)" >&2
+        echo "ocbuild: seed-compiler diagnostics:" >&2
+        ( cd "$TECH" && ./bootstrap/stage0/stage0 "build/${name}.tech" /tmp/ocdiag.tbc 2>&1 | sort | uniq -c | head ) >&2
+        exit 1
+    fi
+}
+
+# every artefact this project put in $TECH/build, removed on the way out
+clean_build_artefacts() {
+    local name="$1"
+    rm -f "$TECH/build/${name}.tech" "$TECH/build/${name}.tbc" "$TECH/build/${name}.bin"
+    rm -f "$TECH/build/pkg.tbc"     # techc's packaging scratch, ours only
+    return 0
+}
+
+case "${1:-}" in
+  stage)
+      stage
+      echo "ocbuild: staged into $TECH (oncopattern/, ocdata/, ocout/)."
+      echo "ocbuild: run 'tools/ocbuild unstage' when finished to restore TECH."
+      ;;
+  unstage)
+      unstage
+      echo "ocbuild: TECH restored."
+      ;;
+  build)
+      name="${3:-$(basename "$2" .tech)}"
+      trap 'clean_build_artefacts "$name"; unstage' EXIT
+      stage
+      link_compile "$2" "$name"
+      ;;
+  run)
+      name="${3:-$(basename "$2" .tech)}"
+      trap 'collect; clean_build_artefacts "$name"; unstage' EXIT
+      stage
+      link_compile "$2" "$name"
+      ( cd "$TECH" && "$MACHINE" "build/${name}.tbc" )
+      ;;
+  vm)
+      name="${3:-$(basename "$2" .tech)}"
+      trap 'collect; clean_build_artefacts "$name"; unstage' EXIT
+      stage
+      link_compile "$2" "$name"
+      ( cd "$TECH" && bash techc run "build/${name}.tbc" )
+      ;;
+  package)
+      name="${3:-$(basename "$2" .tech)}"
+      trap 'collect; clean_build_artefacts "$name"; unstage' EXIT
+      stage
+      link_compile "$2" "$name"
+      ( cd "$TECH" && bash techc package "build/${name}.tech" -o "build/${name}.bin" >/dev/null )
+      cp "$TECH/build/${name}.bin" "$PROJ/dist/${name}.bin"
+      chmod +x "$PROJ/dist/${name}.bin"
+      # the program reads ocdata/ and writes ocout/ relative to its working
+      # directory, so ship both next to the binary: `cd dist && ./name.bin`
+      mkdir -p "$PROJ/dist/ocdata" "$PROJ/dist/ocout"
+      cp "$PROJ/datasets/." "$PROJ/dist/ocdata/" -r
+      echo "ocbuild: packaged -> dist/${name}.bin ($(wc -c < "$PROJ/dist/${name}.bin") bytes)"
+      echo "ocbuild: run it with:  cd dist && ./${name}.bin"
+      ;;
+  *)
+      echo "usage: ocbuild {build|run|vm|package} <module.tech> [name]" >&2
+      echo "       ocbuild {stage|unstage}" >&2
+      exit 2 ;;
+esac

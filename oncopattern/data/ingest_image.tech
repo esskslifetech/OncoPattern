@@ -1,0 +1,158 @@
+# ============================================================================
+# oncopattern/data/ingest_image.tech — pathology image loader.
+#
+# Reads Netpbm grey-maps, the format chosen because it needs no decompression
+# library: P2 (ASCII) and P5 (binary).  Pixels land in the global `g_img`
+# byte buffer (schema.tech), scaled to 0..255.
+#
+# META @module(name:ingest_image, provides:img_load, requires:schema)
+# ============================================================================
+
+IMPORT oncopattern/data/schema
+
+# skip whitespace and #-comments, return the offset of the next token
+FUNC img_skip_ws(b : buf<>, p : int<64>, n : int<64>) : int<64> {
+    DECL go : int<64> = 1
+    WHILE go == 1 {
+        p = oc_skip_ws(b, p, n)
+        go = 0
+        IF p < n {
+            IF b[p] == 35 {
+                DECL e : int<64> = oc_find(b, p, n, 10)
+                IF e < 0 {
+                    p = n
+                } ELSE {
+                    p = e + 1
+                }
+                go = 1
+            }
+        }
+    }
+    RETURN p
+}
+
+DECL img_tok_end : int<64> = 0
+
+# read one integer token; leaves the offset just past it in img_tok_end
+FUNC img_token(b : buf<>, p : int<64>, n : int<64>) : int<64> {
+    p = img_skip_ws(b, p, n)
+    DECL s : int<64> = p
+    DECL v : int<64> = 0
+    WHILE p < n {
+        IF oc_is_digit(b[p]) == 1 {
+            v = v * 10 + (b[p] - 48)
+            p = p + 1
+        } ELSE {
+            img_tok_end = p
+            RETURN v
+        }
+    }
+    img_tok_end = p
+    RETURN v
+}
+
+# Load a PGM.  Returns pixel count, 0 on failure.
+FUNC img_load(path : buf<>) : int<64> {
+    DECL b : buf<> = load(path)
+    DECL n : int<64> = len(b)
+    IF n < 10 {
+        RETURN 0
+    }
+    IF b[0] != 80 {
+        RETURN 0
+    }
+    DECL binary : int<64> = 0
+    IF b[1] == 53 {
+        binary = 1
+    } ELSE {
+        IF b[1] != 50 {
+            RETURN 0
+        }
+    }
+    DECL p : int<64> = 2
+    DECL w : int<64> = img_token(b, p, n)
+    p = img_tok_end
+    DECL h : int<64> = img_token(b, p, n)
+    p = img_tok_end
+    DECL maxv : int<64> = img_token(b, p, n)
+    p = img_tok_end
+    IF w < 1 {
+        RETURN 0
+    }
+    IF h < 1 {
+        RETURN 0
+    }
+    IF w * h > OC_MAX_PX {
+        RETURN 0
+    }
+    g_img_w = w
+    g_img_h = h
+    DECL count : int<64> = w * h
+    DECL i : int<64> = 0
+
+    IF binary == 1 {
+        p = p + 1
+        WHILE i < count {
+            g_img[i] = b[p + i]
+            i = i + 1
+        }
+    } ELSE {
+        WHILE i < count {
+            DECL v : int<64> = img_token(b, p, n)
+            p = img_tok_end
+            IF maxv != 255 {
+                v = (v * 255) //// maxv
+            }
+            g_img[i] = oc_iclamp(v, 0, 255)
+            i = i + 1
+        }
+    }
+    RETURN count
+}
+
+# ---------------------------------------------------------------------------
+# whole-field statistics used by the histology detectors
+# ---------------------------------------------------------------------------
+
+FUNC img_mean() : float<64> {
+    DECL s : float<64> = 0.0
+    DECL n : int<64> = g_img_w * g_img_h
+    DECL i : int<64> = 0
+    WHILE i < n {
+        s = s + g_img[i]
+        i = i + 1
+    }
+    RETURN oc_div(s, n)
+}
+
+# fraction of pixels whose grey level lies in [lo, hi]
+FUNC img_frac_in(lo : int<64>, hi : int<64>) : float<64> {
+    DECL k : int<64> = 0
+    DECL n : int<64> = g_img_w * g_img_h
+    DECL i : int<64> = 0
+    WHILE i < n {
+        IF g_img[i] >= lo {
+            IF g_img[i] <= hi {
+                k = k + 1
+            }
+        }
+        i = i + 1
+    }
+    RETURN oc_div(k, n)
+}
+
+# 16-bin grey-level histogram written into the caller's typed buffer
+FUNC img_hist16(out : buf<16, int<64>>) {
+    DECL i : int<64> = 0
+    WHILE i < 16 {
+        out[i] = 0
+        i = i + 1
+    }
+    DECL n : int<64> = g_img_w * g_img_h
+    i = 0
+    WHILE i < n {
+        DECL bin : int<64> = g_img[i] //// 16
+        out[bin] = out[bin] + 1
+        i = i + 1
+    }
+}

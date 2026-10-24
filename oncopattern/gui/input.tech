@@ -1,0 +1,167 @@
+# ============================================================================
+# oncopattern/gui/input.tech — the event loop.
+#
+# Events come from the machine's I/O model: port_in(0x60) returns a keyboard
+# scan code and the mouse ports return dx/dy/buttons.  On the interpreters
+# these ports are a deterministic 256-byte array, which is exactly what makes
+# a GUI testable: test_gui_render.tech scripts a sequence of events, replays
+# it, and checksums the resulting frame.
+#
+# A scripted queue (ev_push) drives the same dispatch path as real hardware,
+# so headless runs and interactive runs execute identical code.
+#
+# META @module(name:gui_input, provides:input_*, requires:gui_cursor)
+# ============================================================================
+
+IMPORT oncopattern/gui/cursor
+
+DECL PORT_KBD   : int<64> = 96        # 0x60 keyboard data
+DECL PORT_MOUSE : int<64> = 100       # 0x64 mouse status (model)
+
+DECL EV_NONE  : int<64> = 0
+DECL EV_MOVE  : int<64> = 1
+DECL EV_DOWN  : int<64> = 2
+DECL EV_UP    : int<64> = 3
+DECL EV_KEY   : int<64> = 4
+DECL EV_QUIT  : int<64> = 5
+
+DECL EVQ_MAX : int<64> = 256
+DECL ev_kind : buf<256, int<64>> = null
+DECL ev_a    : buf<256, int<64>> = null
+DECL ev_b    : buf<256, int<64>> = null
+DECL ev_head : int<64> = 0
+DECL ev_tail : int<64> = 0
+
+DECL in_last_action : int<64> = -1
+DECL in_last_key    : int<64> = 0
+DECL in_clicks      : int<64> = 0
+DECL in_frames      : int<64> = 0
+
+FUNC ev_push(kind : int<64>, a : int<64>, b : int<64>) : int<64> {
+    DECL nxt : int<64> = (ev_tail + 1) % EVQ_MAX
+    IF nxt == ev_head {
+        RETURN 0
+    }
+    ev_kind[ev_tail] = kind
+    ev_a[ev_tail] = a
+    ev_b[ev_tail] = b
+    ev_tail = nxt
+    RETURN 1
+}
+
+FUNC ev_pending() : int<64> {
+    IF ev_head == ev_tail {
+        RETURN 0
+    }
+    RETURN 1
+}
+
+# Poll the hardware ports and translate to events.  Returns events queued.
+FUNC input_poll_hw() : int<64> {
+    DECL n : int<64> = 0
+    DECL sc : int<64> = port_in(PORT_KBD)
+    IF sc != 0 {
+        ev_push(EV_KEY, sc, 0)
+        n = n + 1
+    }
+    DECL ms : int<64> = port_in(PORT_MOUSE)
+    IF ms != 0 {
+        # bit 7 = button, low bits = packed dx/dy nibbles
+        DECL btn : int<64> = (ms >> 7) & 1
+        DECL dx : int<64> = ((ms >> 4) & 7) - 3
+        DECL dy : int<64> = (ms & 15) - 7
+        ev_push(EV_MOVE, cur_x + dx, cur_y + dy)
+        n = n + 1
+        IF btn == 1 {
+            ev_push(EV_DOWN, cur_x + dx, cur_y + dy)
+            n = n + 1
+        }
+    }
+    RETURN n
+}
+
+# Dispatch one event.  Returns the action id fired, or -1.
+FUNC input_dispatch() : int<64> {
+    IF ev_pending() == 0 {
+        RETURN -1
+    }
+    DECL k : int<64> = ev_kind[ev_head]
+    DECL a : int<64> = ev_a[ev_head]
+    DECL b : int<64> = ev_b[ev_head]
+    ev_head = (ev_head + 1) % EVQ_MAX
+    DECL action : int<64> = -1
+
+    IF k == EV_MOVE {
+        cursor_move(a, b)
+    }
+    IF k == EV_DOWN {
+        cursor_move(a, b)
+        IF cur_over >= 0 {
+            wg_state[cur_over] = S_PRESSED
+        }
+    }
+    IF k == EV_UP {
+        cursor_move(a, b)
+        IF cur_over >= 0 {
+            IF wg_state[cur_over] == S_PRESSED {
+                action = wg_click[cur_over]
+                in_clicks = in_clicks + 1
+                IF wg_kind[cur_over] == W_TAB {
+                    widget_select(cur_over)
+                } ELSE {
+                    IF wg_kind[cur_over] == W_CHECK {
+                        IF wg_state[cur_over] == S_ACTIVE {
+                            wg_state[cur_over] = S_NORMAL
+                        } ELSE {
+                            wg_state[cur_over] = S_ACTIVE
+                        }
+                    } ELSE {
+                        wg_state[cur_over] = S_HOVER
+                    }
+                }
+            }
+        }
+    }
+    IF k == EV_KEY {
+        in_last_key = a
+        # keyboard shortcuts map to the same action ids as the buttons
+        IF a == 27 {
+            action = 99
+        }
+        IF a >= 49 {
+            IF a <= 52 {
+                action = 10 + (a - 49)
+            }
+        }
+    }
+    IF k == EV_QUIT {
+        action = 99
+    }
+    in_last_action = action
+    RETURN action
+}
+
+# Drain the queue; returns the last action fired.
+FUNC input_drain() : int<64> {
+    DECL last : int<64> = -1
+    DECL guard : int<64> = 0
+    WHILE ev_pending() == 1 {
+        DECL a : int<64> = input_dispatch()
+        IF a >= 0 {
+            last = a
+        }
+        guard = guard + 1
+        IF guard > 512 {
+            RETURN last
+        }
+    }
+    RETURN last
+}
+
+# a synthetic click: move, press, release
+FUNC input_click(x : int<64>, y : int<64>) : int<64> {
+    ev_push(EV_MOVE, x, y)
+    ev_push(EV_DOWN, x, y)
+    ev_push(EV_UP, x, y)
+    RETURN input_drain()
+}

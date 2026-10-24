@@ -1,0 +1,150 @@
+# ============================================================================
+# oncopattern/visualization/heatmap.tech — matrix heatmaps.
+#
+# Renders any genes x samples matrix (expression, mutation density,
+# methylation) as a colour-mapped grid with row/column labels, a colour bar
+# and an auto-scaled legend.  Values are normalised per matrix, so the ramp
+# always spans the observed range.
+#
+# META @module(name:vis_heatmap, provides:heatmap_draw, requires:vis_renderer)
+# ============================================================================
+
+IMPORT oncopattern/visualization/renderer
+IMPORT oncopattern/data/ingest_csv
+
+DECL hm_min : float<64> = 0.0
+DECL hm_max : float<64> = 1.0
+
+FUNC heatmap_scan(rows : int<64>, cols : int<64>) {
+    hm_min = 1000000000.0
+    hm_max = -1000000000.0
+    DECL i : int<64> = 0
+    WHILE i < rows * cols {
+        DECL v : float<64> = g_expr[i]
+        IF v < hm_min {
+            hm_min = v
+        }
+        IF v > hm_max {
+            hm_max = v
+        }
+        i = i + 1
+    }
+    IF hm_max - hm_min < OC_EPS {
+        hm_max = hm_min + 1.0
+    }
+}
+
+# colour bar with min/max labels
+FUNC heatmap_colorbar(x : int<64>, y : int<64>, w : int<64>, h : int<64>) {
+    DECL j : int<64> = 0
+    WHILE j < h {
+        ramp(1.0 - j / h)
+        fb_rect(x, y + j, w, 1, ramp_r, ramp_g, ramp_b)
+        j = j + 1
+    }
+    fb_frame(x, y, w, h, 90, 100, 120)
+    fb_text(x + w + 4, y - 3, oc_ftoa(hm_max, 1), 1, 200, 205, 215)
+    fb_text(x + w + 4, y + h - 4, oc_ftoa(hm_min, 1), 1, 200, 205, 215)
+}
+
+# Draw the loaded expression matrix into the rect (x,y,w,h).
+FUNC heatmap_draw(x : int<64>, y : int<64>, w : int<64>, h : int<64>) : int<64> {
+    DECL rows : int<64> = g_expr_g
+    DECL cols : int<64> = g_expr_s
+    IF rows == 0 {
+        RETURN 0
+    }
+    heatmap_scan(rows, cols)
+    DECL lab : int<64> = 42                      # gene-label gutter
+    DECL gw : int<64> = (w - lab - 34) //// cols
+    DECL gh : int<64> = (h - 24) //// rows
+    IF gw < 1 {
+        gw = 1
+    }
+    IF gh < 1 {
+        gh = 1
+    }
+    DECL r : int<64> = 0
+    WHILE r < rows {
+        DECL c : int<64> = 0
+        WHILE c < cols {
+            DECL v : float<64> = g_expr[r * cols + c]
+            ramp((v - hm_min) / (hm_max - hm_min))
+            fb_rect(x + lab + c * gw, y + 14 + r * gh, gw - 1, gh - 1, ramp_r, ramp_g, ramp_b)
+            c = c + 1
+        }
+        # gene name every other row when the cells are short
+        IF gh >= 7 {
+            fb_text(x, y + 14 + r * gh, oc_gene_name(r), 1, 170, 178, 195)
+        } ELSE {
+            IF r % 2 == 0 {
+                fb_text(x, y + 14 + r * gh, oc_gene_name(r), 1, 170, 178, 195)
+            }
+        }
+        r = r + 1
+    }
+    # sample header: N1..N6 normal, T1..T6 tumour
+    DECL c2 : int<64> = 0
+    WHILE c2 < cols {
+        DECL half : int<64> = cols //// 2
+        IF c2 < half {
+            fb_text(x + lab + c2 * gw + 1, y + 2, strbuf("N"), 1, 130, 190, 255)
+        } ELSE {
+            fb_text(x + lab + c2 * gw + 1, y + 2, strbuf("T"), 1, 255, 150, 130)
+        }
+        c2 = c2 + 1
+    }
+    heatmap_colorbar(x + lab + cols * gw + 8, y + 14, 10, rows * gh - 4)
+    RETURN rows * cols
+}
+
+# mutation-density heatmap: variants binned chromosome x position
+DECL hm_bins : buf<512, float<64>> = null
+
+FUNC heatmap_mutation(x : int<64>, y : int<64>, w : int<64>, h : int<64>, chroms : int<64>, bins : int<64>) : int<64> {
+    DECL i : int<64> = 0
+    WHILE i < chroms * bins {
+        hm_bins[i] = 0.0
+        i = i + 1
+    }
+    DECL maxv : float<64> = 1.0
+    i = 0
+    WHILE i < g_var_n {
+        DECL c : int<64> = g_var_chrom[i] - 1
+        DECL b : int<64> = (g_var_pos[i] //// 25000) % bins
+        IF c >= 0 {
+            IF c < chroms {
+                DECL k : int<64> = c * bins + b
+                hm_bins[k] = hm_bins[k] + 1.0
+                IF hm_bins[k] > maxv {
+                    maxv = hm_bins[k]
+                }
+            }
+        }
+        i = i + 1
+    }
+    DECL gw : int<64> = (w - 30) //// bins
+    DECL gh : int<64> = (h - 14) //// chroms
+    IF gw < 1 {
+        gw = 1
+    }
+    IF gh < 1 {
+        gh = 1
+    }
+    DECL c2 : int<64> = 0
+    WHILE c2 < chroms {
+        DECL b2 : int<64> = 0
+        WHILE b2 < bins {
+            ramp(hm_bins[c2 * bins + b2] / maxv)
+            fb_rect(x + 24 + b2 * gw, y + 12 + c2 * gh, gw, gh - 1, ramp_r, ramp_g, ramp_b)
+            b2 = b2 + 1
+        }
+        IF c2 % 2 == 0 {
+            fb_text(x, y + 12 + c2 * gh, oc_itoa(c2 + 1), 1, 160, 168, 185)
+        }
+        c2 = c2 + 1
+    }
+    hm_min = 0.0
+    hm_max = maxv
+    RETURN maxv //// 1
+}

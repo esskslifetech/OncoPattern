@@ -1,0 +1,28 @@
+DECL C : buf<65536, float<64>> = null
+DECL Cn : buf<65536, float<64>> = null
+DECL N : int<64> = 64
+FUNC idx(i : int<64>, j : int<64>) : int<64> {
+    RETURN i * 64 + j
+}
+C[idx(32,32)] = 100.0
+DECL step : int<64> = 0
+WHILE step < 20 {
+    FLOW diff ...[1..63, 1..63] {
+        DECL i : int<64> = $i + 1
+        DECL j : int<64> = $j + 1
+        Cn[i * 64 + j] = C[i * 64 + j] + 0.2 * (C[(i-1)*64+j] + C[(i+1)*64+j] + C[i*64+(j-1)] + C[i*64+(j+1)] - 4.0 * C[i*64+j])
+    }
+    FLOW cp ...[0..4096] {
+        C[$i] = Cn[$i]
+    }
+    step = step + 1
+}
+YIELD C[idx(32,32)]
+YIELD C[idx(30,32)]
+DECL sum : float<64> = 0.0
+FLOW s ...[0..4096] {
+    sum += C[$i]
+}
+YIELD sum
+DECL t0 : int<64> = sys_ms()
+YIELD 999

@@ -1,0 +1,40 @@
+DECL g_grid : buf<8192, float<64>> = null
+DECL rep : data<pid:str<ascii>, tmb:float<64>, cnt:int<64>> = null
+FUNC f2s(v : float<64>, dec : int<64>) : buf<> {
+    DECL neg : int<64> = 0
+    IF v < 0.0 {
+        neg = 1
+        v = 0.0 - v
+    }
+    DECL scale : float<64> = 1.0
+    DECL k : int<64> = 0
+    WHILE k < dec {
+        scale = scale * 10.0
+        k = k + 1
+    }
+    DECL scaled : int<64> = v * scale + 0.5
+    DECL ip : int<64> = scaled //// 1
+    RETURN strbuf("x")
+}
+YIELD 1.5
+YIELD 2.25 * 2.0
+DECL a : float<64> = 7.0
+DECL b : float<64> = 2.0
+YIELD a / b
+DECL ii : int<64> = 3.7
+YIELD ii
+rep.tmb = 12.5
+rep.cnt = 9
+YIELD rep.tmb
+DECL s : int<64> = 0
+FLOW acc ...[0..5] {
+    s += $i * $i
+}
+YIELD s
+FLOW g2 ...[0..3, 0..3] {
+    g_grid[$i * 3 + $j] = $i * 1.0 + $j * 0.5
+}
+YIELD g_grid[4]
+YIELD sha256(strbuf("hello"))
+DECL h : int<64> = fnv1a(strbuf("abc"))
+YIELD h

@@ -1,0 +1,139 @@
+# ============================================================================
+# oncopattern/data/ingest_json.tech — structured (JSON-like) loader for
+# pathway / organ-topology graphs.
+#
+# Recognises the OncoPattern graph document:
+#     { "nodes": [ {"id": 0, "name": "lung"}, ... ],
+#       "edges": [ [from, to, weight], ... ] }
+#
+# A full JSON parser is not needed and not built: this is a token scanner
+# that is exact for the documented schema and rejects anything else.
+#
+# META @module(name:ingest_json, provides:json_graph_load, requires:schema)
+# ============================================================================
+
+IMPORT oncopattern/data/schema
+
+# find the literal `lit` in b starting at `from`; -1 if absent
+FUNC json_find_lit(b : buf<>, from : int<64>, lit : buf<>) : int<64> {
+    DECL n : int<64> = len(b)
+    DECL m : int<64> = len(lit)
+    DECL i : int<64> = from
+    WHILE i <= n - m {
+        DECL j : int<64> = 0
+        DECL ok : int<64> = 1
+        WHILE j < m {
+            IF b[i + j] != lit[j] {
+                ok = 0
+                j = m
+            } ELSE {
+                j = j + 1
+            }
+        }
+        IF ok == 1 {
+            RETURN i
+        }
+        i = i + 1
+    }
+    RETURN -1
+}
+
+# Parse the graph document.  Returns the node count.
+FUNC json_graph_load(path : buf<>) : int<64> {
+    DECL src : buf<> = load(path)
+    g_json_src = src
+    DECL n : int<64> = len(src)
+    g_node_n = 0
+    g_edge_n = 0
+
+    DECL nodes_at : int<64> = json_find_lit(src, 0, strbuf("\"nodes\""))
+    DECL edges_at : int<64> = json_find_lit(src, 0, strbuf("\"edges\""))
+    IF nodes_at < 0 {
+        RETURN 0
+    }
+    IF edges_at < 0 {
+        edges_at = n
+    }
+
+    # ---------------------------------------------------------- nodes
+    # each node contributes one  "name": "<value>"
+    DECL p : int<64> = nodes_at
+    WHILE p < edges_at {
+        DECL na : int<64> = json_find_lit(src, p, strbuf("\"name\""))
+        IF na < 0 {
+            p = edges_at
+        } ELSE {
+            IF na > edges_at {
+                p = edges_at
+            } ELSE {
+                # first quote after the colon opens the value
+                DECL c : int<64> = oc_find(src, na + 6, edges_at, 34)
+                IF c < 0 {
+                    p = edges_at
+                } ELSE {
+                    DECL e : int<64> = oc_find(src, c + 1, edges_at, 34)
+                    IF e < 0 {
+                        p = edges_at
+                    } ELSE {
+                        IF g_node_n < OC_MAX_NODE {
+                            g_node_off[g_node_n] = c + 1
+                            g_node_len[g_node_n] = e - c - 1
+                            g_node_n = g_node_n + 1
+                        }
+                        p = e + 1
+                    }
+                }
+            }
+        }
+    }
+
+    # ---------------------------------------------------------- edges
+    # each edge is  [ a, b, w ]
+    p = edges_at + 7
+    WHILE p < n {
+        DECL ob : int<64> = oc_find(src, p, n, 91)      # '['
+        IF ob < 0 {
+            p = n
+        } ELSE {
+            DECL cb : int<64> = oc_find(src, ob + 1, n, 93)   # ']'
+            IF cb < 0 {
+                p = n
+            } ELSE {
+                DECL c1 : int<64> = oc_find(src, ob + 1, cb, 44)
+                IF c1 < 0 {
+                    p = cb + 1
+                } ELSE {
+                    DECL c2 : int<64> = oc_find(src, c1 + 1, cb, 44)
+                    IF c2 < 0 {
+                        p = cb + 1
+                    } ELSE {
+                        IF g_edge_n < OC_MAX_EDGE {
+                            g_edge_a[g_edge_n] = oc_atoi(src, ob + 1, c1)
+                            g_edge_b[g_edge_n] = oc_atoi(src, c1 + 1, c2)
+                            g_edge_w[g_edge_n] = oc_atof(src, c2 + 1, cb)
+                            g_edge_n = g_edge_n + 1
+                        }
+                        p = cb + 1
+                    }
+                }
+            }
+        }
+    }
+    RETURN g_node_n
+}
+
+# degree of a node in the (undirected) organ topology
+FUNC json_degree(node : int<64>) : int<64> {
+    DECL d : int<64> = 0
+    DECL i : int<64> = 0
+    WHILE i < g_edge_n {
+        IF g_edge_a[i] == node {
+            d = d + 1
+        }
+        IF g_edge_b[i] == node {
+            d = d + 1
+        }
+        i = i + 1
+    }
+    RETURN d
+}

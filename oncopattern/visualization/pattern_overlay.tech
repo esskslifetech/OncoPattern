@@ -1,0 +1,81 @@
+# ============================================================================
+# oncopattern/visualization/pattern_overlay.tech — detections drawn on the
+# pathology image.
+#
+# The grey field is drawn as the base layer; the connected components found by
+# the histology detectors are outlined in category colour (nuclei cyan,
+# necrosis magenta) with the tumour/stroma margin marked, so a pathologist can
+# see exactly what the detector fired on.
+#
+# META @module(name:vis_overlay, provides:overlay_draw, requires:pat_detect)
+# ============================================================================
+
+IMPORT oncopattern/visualization/renderer
+IMPORT oncopattern/pattern/detect
+
+# draw the grey pathology field, scaled by `zoom`
+FUNC overlay_base(x : int<64>, y : int<64>, zoom : int<64>) : int<64> {
+    DECL j : int<64> = 0
+    WHILE j < g_img_h {
+        DECL i : int<64> = 0
+        WHILE i < g_img_w {
+            DECL v : int<64> = g_img[j * g_img_w + i]
+            fb_rect(x + i * zoom, y + j * zoom, zoom, zoom, v, v, v)
+            i = i + 1
+        }
+        j = j + 1
+    }
+    RETURN g_img_w * zoom
+}
+
+# outline every labelled component of the current cc_label pass
+FUNC overlay_components(x : int<64>, y : int<64>, zoom : int<64>, r : int<64>, g : int<64>, b : int<64>) : int<64> {
+    DECL k : int<64> = 0
+    WHILE k < d_comp_n {
+        DECL cx : int<64> = x + d_comp_cx[k] * zoom
+        DECL cy : int<64> = y + d_comp_cy[k] * zoom
+        # radius from area, assuming a roughly round object
+        DECL rad : int<64> = sqrt(d_comp_area[k] / OC_PI) * zoom + 1 //// 1
+        fb_circle(cx, cy, rad, r, g, b, 0)
+        k = k + 1
+    }
+    RETURN d_comp_n
+}
+
+# Full overlay: base image + nuclei + necrosis + margin + legend.
+FUNC overlay_draw(x : int<64>, y : int<64>, zoom : int<64>) : int<64> {
+    IF g_img_w == 0 {
+        RETURN 0
+    }
+    fb_text(x, y - 12, strbuf("PATHOLOGY FIELD WITH DETECTED PATTERNS"), 1, 225, 230, 240)
+    DECL side : int<64> = overlay_base(x, y, zoom)
+    # nuclei
+    DECL nuc : int<64> = cc_label(OC_NUCLEUS_MIN, 255, 4)
+    overlay_components(x, y, zoom, 90, 230, 255)
+    # necrosis
+    DECL nec : int<64> = cc_label(0, OC_NECROSIS_MAX, 20)
+    overlay_components(x, y, zoom, 255, 90, 200)
+    # tumour/stroma margin
+    DECL margin : int<64> = g_pat_loc[PAT_TIL_GRADIENT]
+    IF margin > 0 {
+        DECL j : int<64> = 0
+        WHILE j < g_img_h * zoom {
+            IF (j //// 4) % 2 == 0 {
+                fb_rect(x + margin * zoom, y + j, 1, 2, 255, 235, 120)
+            }
+            j = j + 2
+        }
+    }
+    fb_frame(x, y, side, g_img_h * zoom, 90, 100, 120)
+    # legend
+    DECL ly : int<64> = y + g_img_h * zoom + 6
+    fb_circle(x + 6, ly + 4, 4, 90, 230, 255, 0)
+    fb_text(x + 14, ly + 1, strbuf("NUCLEI"), 1, 190, 196, 210)
+    fb_text(x + 56, ly + 1, oc_itoa(nuc), 1, 130, 200, 230)
+    fb_circle(x + 96, ly + 4, 4, 255, 90, 200, 0)
+    fb_text(x + 104, ly + 1, strbuf("NECROSIS"), 1, 190, 196, 210)
+    fb_text(x + 160, ly + 1, oc_itoa(nec), 1, 230, 130, 200)
+    fb_rect(x + 196, ly + 2, 2, 6, 255, 235, 120)
+    fb_text(x + 204, ly + 1, strbuf("MARGIN"), 1, 190, 196, 210)
+    RETURN nuc + nec
+}

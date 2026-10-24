@@ -1,0 +1,1311 @@
+{
+ "version": "6.9",
+ "hitCount": 5662,
+ "nextCursorMark": "AoJdxQEoMzkzNzYzMTU=",
+ "nextPageUrl": "https://www.ebi.ac.uk/europepmc/webservices/rest/search?query=\"tumor mutational burden\" AND \"immune checkpoint inhibitor\" AND survival&cursorMark=AoJdxQEoMzkzNzYzMTU=&resultType=core&pageSize=1&sort=CITED desc&format=json",
+ "request": {
+  "queryString": "\"tumor mutational burden\" AND \"immune checkpoint inhibitor\" AND survival",
+  "resultType": "core",
+  "cursorMark": "*",
+  "pageSize": 1,
+  "sort": "CITED desc",
+  "synonym": false
+ },
+ "resultList": {
+  "result": [
+   {
+    "id": "30643254",
+    "source": "MED",
+    "pmid": "30643254",
+    "pmcid": "PMC6365097",
+    "fullTextIdList": {
+     "fullTextId": [
+      "PMC6365097"
+     ]
+    },
+    "doi": "10.1038/s41588-018-0312-8",
+    "title": "Tumor mutational load predicts survival after immunotherapy across multiple cancer types.",
+    "authorString": "Samstein RM, Lee CH, Shoushtari AN, Hellmann MD, Shen R, Janjigian YY, Barron DA, Zehir A, Jordan EJ, Omuro A, Kaley TJ, Kendall SM, Motzer RJ, Hakimi AA, Voss MH, Russo P, Rosenberg J, Iyer G, Bochner BH, Bajorin DF, Al-Ahmadie HA, Chaft JE, Rudin CM, Riely GJ, Baxi S, Ho AL, Wong RJ, Pfister DG, Wolchok JD, Barker CA, Gutin PH, Brennan CW, Tabar V, Mellinghoff IK, DeAngelis LM, Ariyan CE, Lee N, Tap WD, Gounder MM, D'Angelo SP, Saltz L, Stadler ZK, Scher HI, Baselga J, Razavi P, Klebanoff CA, Yaeger R, Segal NH, Ku GY, DeMatteo RP, Ladanyi M, Rizvi NA, Berger MF, Riaz N, Solit DB, Chan TA, Morris LGT.",
+    "authorList": {
+     "author": [
+      {
+       "fullName": "Samstein RM",
+       "firstName": "Robert M",
+       "lastName": "Samstein",
+       "initials": "RM",
+       "authorId": {
+        "type": "ORCID",
+        "value": "0000-0001-6860-2401"
+       },
+       "authorAffiliationDetailsList": {
+        "authorAffiliation": [
+         {
+          "affiliation": "Department of Radiation Oncology, Memorial Sloan Kettering Cancer Center, New York, NY, USA."
+         },
+         {
+          "affiliation": "Human Oncology and Pathogenesis Program, Memorial Sloan Kettering Cancer Center, New York, NY, USA."
+         }
+        ]
+       }
+      },
+      {
+       "fullName": "Lee CH",
+       "firstName": "Chung-Han",
+       "lastName": "Lee",
+       "initials": "CH",
+       "authorAffiliationDetailsList": {
+        "authorAffiliation": [
+         {
+          "affiliation": "Department of Medicine, Memorial Sloan Kettering Cancer Center, New York, NY, USA."
+         },
+         {
+          "affiliation": "Department of Medicine, Weill Cornell Medical Center, New York, NY, USA."
+         }
+        ]
+       }
+      },
+      {
+       "fullName": "Shoushtari AN",
+       "firstName": "Alexander N",
+       "lastName": "Shoushtari",
+       "initials": "AN",
+       "authorId": {
+        "type": "ORCID",
+        "value": "0000-0002-8065-4412"
+       },
+       "authorAffiliationDetailsList": {
+        "authorAffiliation": [
+         {
+          "affiliation": "Department of Medicine, Memorial Sloan Kettering Cancer Center, New York, NY, USA."
+         },
+         {
+          "affiliation": "Department of Medicine, Weill Cornell Medical Center, New York, NY, USA."
+         }
+        ]
+       }
+      },
+      {
+       "fullName": "Hellmann MD",
+       "firstName": "Matthew D",
+       "lastName": "Hellmann",
+       "initials": "MD",
+       "authorId": {
+        "type": "ORCID",
+        "value": "0000-0002-2670-9777"
+       },
+       "authorAffiliationDetailsList": {
+        "authorAffiliation": [
+         {
+          "affiliation": "Department of Medicine, Memorial Sloan Kettering Cancer Center, New York, NY, USA."
+         },
+         {
+          "affiliation": "Department of Medicine, Weill Cornell Medical Center, New York, NY, USA."
+         }
+        ]
+       }
+      },
+      {
+       "fullName": "Shen R",
+       "firstName": "Ronglai",
+       "lastName": "Shen",
+       "initials": "R",
+       "authorAffiliationDetailsList": {
+        "authorAffiliation": [
+         {
+          "affiliation": "Department of Epidemiology and Biostatistics, Memorial Sloan Kettering Cancer Center, New York, NY, USA."
+         }
+        ]
+       }
+      },
+      {
+       "fullName": "Janjigian YY",
+       "firstName": "Yelena Y",
+       "lastName": "Janjigian",
+       "initials": "YY",
+       "authorAffiliationDetailsList": {
+        "authorAffiliation": [
+         {
+          "affiliation": "Department of Medicine, Memorial Sloan Kettering Cancer Center, New York, NY, USA."
+         },
+         {
+          "affiliation": "Department of Medicine, Weill Cornell Medical Center, New York, NY, USA."
+         }
+        ]
+       }
+      },
+      {
+       "fullName": "Barron DA",
+       "firstName": "David A",
+       "lastName": "Barron",
+       "initials": "DA",
+       "authorAffiliationDetailsList": {
+        "authorAffiliation": [
+         {
+          "affiliation": "Department of Radiation Oncology, Memorial Sloan Kettering Cancer Center, New York, NY, USA."
+         },
+         {
+          "affiliation": "Human Oncology and Pathogenesis Program, Memorial Sloan Kettering Cancer Center, New York, NY, USA."
+         }
+        ]
+       }
+      },
+      {
+       "fullName": "Zehir A",
+       "firstName": "Ahmet",
+       "lastName": "Zehir",
+       "initials": "A",
+       "authorId": {
+        "type": "ORCID",
+        "value": "0000-0001-5406-4104"
+       },
+       "authorAffiliationDetailsList": {
+        "authorAffiliation": [
+         {
+          "affiliation": "Department of Pathology, Memorial Sloan Kettering Cancer Center, New York, NY, USA."
+         }
+        ]
+       }
+      },
+      {
+       "fullName": "Jordan EJ",
+       "firstName": "Emmet J",
+       "lastName": "Jordan",
+       "initials": "EJ",
+       "authorAffiliationDetailsList": {
+        "authorAffiliation": [
+         {
+          "affiliation": "Human Oncology and Pathogenesis Program, Memorial Sloan Kettering Cancer Center, New York, NY, USA."
+         }
+        ]
+       }
+      },
+      {
+       "fullName": "Omuro A",
+       "firstName": "Antonio",
+       "lastName": "Omuro",
+       "initials": "A",
+       "authorAffiliationDetailsList": {
+        "authorAffiliation": [
+         {
+          "affiliation": "Department of Neurology, Memorial Sloan Kettering Cancer Center, New York, NY, USA."
+         }
+        ]
+       }
+      },
+      {
+       "fullName": "Kaley TJ",
+       "firstName": "Thomas J",
+       "lastName": "Kaley",
+       "initials": "TJ",
+       "authorAffiliationDetailsList": {
+        "authorAffiliation": [
+         {
+          "affiliation": "Department of Neurology, Memorial Sloan Kettering Cancer Center, New York, NY, USA."
+         }
+        ]
+       }
+      },
+      {
+       "fullName": "Kendall SM",
+       "firstName": "Sviatoslav M",
+       "lastName": "Kendall",
+       "initials": "SM",
+       "authorAffiliationDetailsList": {
+        "authorAffiliation": [
+         {
+          "affiliation": "Human Oncology and Pathogenesis Program, Memorial Sloan Kettering Cancer Center, New York, NY, USA."
+         },
+         {
+          "affiliation": "Immunogenomics and Precision Oncology Platform, Memorial Sloan Kettering Cancer Center, New York, NY, USA."
+         }
+        ]
+       }
+      },
+      {
+       "fullName": "Motzer RJ",
+       "firstName": "Robert J",
+       "lastName": "Motzer",
+       "initials": "RJ",
+       "authorId": {
+        "type": "ORCID",
+        "value": "0000-0001-6925-2327"
+       },
+       "authorAffiliationDetailsList": {
+        "authorAffiliation": [
+         {
+          "affiliation": "Department of Medicine, Memorial Sloan Kettering Cancer Center, New York, NY, USA."
+         },
+         {
+          "affiliation": "Department of Medicine, Weill Cornell Medical Center, New York, NY, USA."
+         }
+        ]
+       }
+      },
+      {
+       "fullName": "Hakimi AA",
+       "firstName": "A Ari",
+       "lastName": "Hakimi",
+       "initials": "AA",
+       "authorAffiliationDetailsList": {
+        "authorAffiliation": [
+         {
+          "affiliation": "Department of Surgery, Memorial Sloan Kettering Cancer Center, New York, NY, USA."
+         }
+        ]
+       }
+      },
+      {
+       "fullName": "Voss MH",
+       "firstName": "Martin H",
+       "lastName": "Voss",
+       "initials": "MH",
+       "authorAffiliationDetailsList": {
+        "authorAffiliation": [
+         {
+          "affiliation": "Department of Medicine, Memorial Sloan Kettering Cancer Center, New York, NY, USA."
+         },
+         {
+          "affiliation": "Department of Medicine, Weill Cornell Medical Center, New York, NY, USA."
+         }
+        ]
+       }
+      },
+      {
+       "fullName": "Russo P",
+       "firstName": "Paul",
+       "lastName": "Russo",
+       "initials": "P",
+       "authorAffiliationDetailsList": {
+        "authorAffiliation": [
+         {
+          "affiliation": "Department of Surgery, Memorial Sloan Kettering Cancer Center, New York, NY, USA."
+         }
+        ]
+       }
+      },
+      {
+       "fullName": "Rosenberg J",
+       "firstName": "Jonathan",
+       "lastName": "Rosenberg",
+       "initials": "J",
+       "authorAffiliationDetailsList": {
+        "authorAffiliation": [
+         {
+          "affiliation": "Department of Medicine, Memorial Sloan Kettering Cancer Center, New York, NY, USA."
+         },
+         {
+          "affiliation": "Department of Medicine, Weill Cornell Medical Center, New York, NY, USA."
+         }
+        ]
+       }
+      },
+      {
+       "fullName": "Iyer G",
+       "firstName": "Gopa",
+       "lastName": "Iyer",
+       "initials": "G",
+       "authorId": {
+        "type": "ORCID",
+        "value": "0000-0002-5093-6099"
+       },
+       "authorAffiliationDetailsList": {
+        "authorAffiliation": [
+         {
+          "affiliation": "Department of Medicine, Memorial Sloan Kettering Cancer Center, New York, NY, USA."
+         },
+         {
+          "affiliation": "Department of Medicine, Weill Cornell Medical Center, New York, NY, USA."
+         }
+        ]
+       }
+      },
+      {
+       "fullName": "Bochner BH",
+       "firstName": "Bernard H",
+       "lastName": "Bochner",
+       "initials": "BH",
+       "authorAffiliationDetailsList": {
+        "authorAffiliation": [
+         {
+          "affiliation": "Department of Surgery, Memorial Sloan Kettering Cancer Center, New York, NY, USA."
+         }
+        ]
+       }
+      },
+      {
+       "fullName": "Bajorin DF",
+       "firstName": "Dean F",
+       "lastName": "Bajorin",
+       "initials": "DF",
+       "authorAffiliationDetailsList": {
+        "authorAffiliation": [
+         {
+          "affiliation": "Department of Medicine, Memorial Sloan Kettering Cancer Center, New York, NY, USA."
+         },
+         {
+          "affiliation": "Department of Medicine, Weill Cornell Medical Center, New York, NY, USA."
+         }
+        ]
+       }
+      },
+      {
+       "fullName": "Al-Ahmadie HA",
+       "firstName": "Hikmat A",
+       "lastName": "Al-Ahmadie",
+       "initials": "HA",
+       "authorAffiliationDetailsList": {
+        "authorAffiliation": [
+         {
+          "affiliation": "Department of Pathology, Memorial Sloan Kettering Cancer Center, New York, NY, USA."
+         }
+        ]
+       }
+      },
+      {
+       "fullName": "Chaft JE",
+       "firstName": "Jamie E",
+       "lastName": "Chaft",
+       "initials": "JE",
+       "authorAffiliationDetailsList": {
+        "authorAffiliation": [
+         {
+          "affiliation": "Department of Medicine, Memorial Sloan Kettering Cancer Center, New York, NY, USA."
+         },
+         {
+          "affiliation": "Department of Medicine, Weill Cornell Medical Center, New York, NY, USA."
+         }
+        ]
+       }
+      },
+      {
+       "fullName": "Rudin CM",
+       "firstName": "Charles M",
+       "lastName": "Rudin",
+       "initials": "CM",
+       "authorId": {
+        "type": "ORCID",
+        "value": "0000-0001-5204-3465"
+       },
+       "authorAffiliationDetailsList": {
+        "authorAffiliation": [
+         {
+          "affiliation": "Department of Medicine, Memorial Sloan Kettering Cancer Center, New York, NY, USA."
+         },
+         {
+          "affiliation": "Department of Medicine, Weill Cornell Medical Center, New York, NY, USA."
+         }
+        ]
+       }
+      },
+      {
+       "fullName": "Riely GJ",
+       "firstName": "Gregory J",
+       "lastName": "Riely",
+       "initials": "GJ",
+       "authorAffiliationDetailsList": {
+        "authorAffiliation": [
+         {
+          "affiliation": "Department of Medicine, Memorial Sloan Kettering Cancer Center, New York, NY, USA."
+         },
+         {
+          "affiliation": "Department of Medicine, Weill Cornell Medical Center, New York, NY, USA."
+         }
+        ]
+       }
+      },
+      {
+       "fullName": "Baxi S",
+       "firstName": "Shrujal",
+       "lastName": "Baxi",
+       "initials": "S",
+       "authorAffiliationDetailsList": {
+        "authorAffiliation": [
+         {
+          "affiliation": "Department of Medicine, Memorial Sloan Kettering Cancer Center, New York, NY, USA."
+         },
+         {
+          "affiliation": "Department of Medicine, Weill Cornell Medical Center, New York, NY, USA."
+         }
+        ]
+       }
+      },
+      {
+       "fullName": "Ho AL",
+       "firstName": "Alan L",
+       "lastName": "Ho",
+       "initials": "AL",
+       "authorAffiliationDetailsList": {
+        "authorAffiliation": [
+         {
+          "affiliation": "Department of Medicine, Memorial Sloan Kettering Cancer Center, New York, NY, USA."
+         },
+         {
+          "affiliation": "Department of Medicine, Weill Cornell Medical Center, New York, NY, USA."
+         }
+        ]
+       }
+      },
+      {
+       "fullName": "Wong RJ",
+       "firstName": "Richard J",
+       "lastName": "Wong",
+       "initials": "RJ",
+       "authorAffiliationDetailsList": {
+        "authorAffiliation": [
+         {
+          "affiliation": "Department of Surgery, Memorial Sloan Kettering Cancer Center, New York, NY, USA."
+         }
+        ]
+       }
+      },
+      {
+       "fullName": "Pfister DG",
+       "firstName": "David G",
+       "lastName": "Pfister",
+       "initials": "DG",
+       "authorAffiliationDetailsList": {
+        "authorAffiliation": [
+         {
+          "affiliation": "Department of Medicine, Memorial Sloan Kettering Cancer Center, New York, NY, USA."
+         },
+         {
+          "affiliation": "Department of Medicine, Weill Cornell Medical Center, New York, NY, USA."
+         }
+        ]
+       }
+      },
+      {
+       "fullName": "Wolchok JD",
+       "firstName": "Jedd D",
+       "lastName": "Wolchok",
+       "initials": "JD",
+       "authorAffiliationDetailsList": {
+        "authorAffiliation": [
+         {
+          "affiliation": "Department of Medicine, Memorial Sloan Kettering Cancer Center, New York, NY, USA."
+         },
+         {
+          "affiliation": "Department of Medicine, Weill Cornell Medical Center, New York, NY, USA."
+         }
+        ]
+       }
+      },
+      {
+       "fullName": "Barker CA",
+       "firstName": "Christopher A",
+       "lastName": "Barker",
+       "initials": "CA",
+       "authorId": {
+        "type": "ORCID",
+        "value": "0000-0003-1882-1088"
+       },
+       "authorAffiliationDetailsList": {
+        "authorAffiliation": [
+         {
+          "affiliation": "Department of Radiation Oncology, Memorial Sloan Kettering Cancer Center, New York, NY, USA."
+         }
+        ]
+       }
+      },
+      {
+       "fullName": "Gutin PH",
+       "firstName": "Philip H",
+       "lastName": "Gutin",
+       "initials": "PH",
+       "authorAffiliationDetailsList": {
+        "authorAffiliation": [
+         {
+          "affiliation": "Department of Surgery, Memorial Sloan Kettering Cancer Center, New York, NY, USA."
+         }
+        ]
+       }
+      },
+      {
+       "fullName": "Brennan CW",
+       "firstName": "Cameron W",
+       "lastName": "Brennan",
+       "initials": "CW",
+       "authorId": {
+        "type": "ORCID",
+        "value": "0000-0003-4064-8891"
+       },
+       "authorAffiliationDetailsList": {
+        "authorAffiliation": [
+         {
+          "affiliation": "Department of Surgery, Memorial Sloan Kettering Cancer Center, New York, NY, USA."
+         }
+        ]
+       }
+      },
+      {
+       "fullName": "Tabar V",
+       "firstName": "Viviane",
+       "lastName": "Tabar",
+       "initials": "V",
+       "authorAffiliationDetailsList": {
+        "authorAffiliation": [
+         {
+          "affiliation": "Department of Surgery, Memorial Sloan Kettering Cancer Center, New York, NY, USA."
+         }
+        ]
+       }
+      },
+      {
+       "fullName": "Mellinghoff IK",
+       "firstName": "Ingo K",
+       "lastName": "Mellinghoff",
+       "initials": "IK",
+       "authorId": {
+        "type": "ORCID",
+        "value": "0000-0002-4347-8149"
+       },
+       "authorAffiliationDetailsList": {
+        "authorAffiliation": [
+         {
+          "affiliation": "Immunogenomics and Precision Oncology Platform, Memorial Sloan Kettering Cancer Center, New York, NY, USA."
+         }
+        ]
+       }
+      },
+      {
+       "fullName": "DeAngelis LM",
+       "firstName": "Lisa M",
+       "lastName": "DeAngelis",
+       "initials": "LM",
+       "authorAffiliationDetailsList": {
+        "authorAffiliation": [
+         {
+          "affiliation": "Immunogenomics and Precision Oncology Platform, Memorial Sloan Kettering Cancer Center, New York, NY, USA."
+         }
+        ]
+       }
+      },
+      {
+       "fullName": "Ariyan CE",
+       "firstName": "Charlotte E",
+       "lastName": "Ariyan",
+       "initials": "CE",
+       "authorId": {
+        "type": "ORCID",
+        "value": "0000-0003-0818-3895"
+       },
+       "authorAffiliationDetailsList": {
+        "authorAffiliation": [
+         {
+          "affiliation": "Department of Surgery, Memorial Sloan Kettering Cancer Center, New York, NY, USA."
+         }
+        ]
+       }
+      },
+      {
+       "fullName": "Lee N",
+       "firstName": "Nancy",
+       "lastName": "Lee",
+       "initials": "N",
+       "authorAffiliationDetailsList": {
+        "authorAffiliation": [
+         {
+          "affiliation": "Department of Radiation Oncology, Memorial Sloan Kettering Cancer Center, New York, NY, USA."
+         }
+        ]
+       }
+      },
+      {
+       "fullName": "Tap WD",
+       "firstName": "William D",
+       "lastName": "Tap",
+       "initials": "WD",
+       "authorAffiliationDetailsList": {
+        "authorAffiliation": [
+         {
+          "affiliation": "Department of Medicine, Memorial Sloan Kettering Cancer Center, New York, NY, USA."
+         },
+         {
+          "affiliation": "Department of Medicine, Weill Cornell Medical Center, New York, NY, USA."
+         }
+        ]
+       }
+      },
+      {
+       "fullName": "Gounder MM",
+       "firstName": "Mrinal M",
+       "lastName": "Gounder",
+       "initials": "MM",
+       "authorAffiliationDetailsList": {
+        "authorAffiliation": [
+         {
+          "affiliation": "Department of Medicine, Memorial Sloan Kettering Cancer Center, New York, NY, USA."
+         },
+         {
+          "affiliation": "Department of Medicine, Weill Cornell Medical Center, New York, NY, USA."
+         }
+        ]
+       }
+      },
+      {
+       "fullName": "D'Angelo SP",
+       "firstName": "Sandra P",
+       "lastName": "D'Angelo",
+       "initials": "SP",
+       "authorAffiliationDetailsList": {
+        "authorAffiliation": [
+         {
+          "affiliation": "Department of Medicine, Memorial Sloan Kettering Cancer Center, New York, NY, USA."
+         },
+         {
+          "affiliation": "Department of Medicine, Weill Cornell Medical Center, New York, NY, USA."
+         }
+        ]
+       }
+      },
+      {
+       "fullName": "Saltz L",
+       "firstName": "Leonard",
+       "lastName": "Saltz",
+       "initials": "L",
+       "authorAffiliationDetailsList": {
+        "authorAffiliation": [
+         {
+          "affiliation": "Department of Medicine, Memorial Sloan Kettering Cancer Center, New York, NY, USA."
+         },
+         {
+          "affiliation": "Department of Medicine, Weill Cornell Medical Center, New York, NY, USA."
+         }
+        ]
+       }
+      },
+      {
+       "fullName": "Stadler ZK",
+       "firstName": "Zsofia K",
+       "lastName": "Stadler",
+       "initials": "ZK",
+       "authorAffiliationDetailsList": {
+        "authorAffiliation": [
+         {
+          "affiliation": "Department of Medicine, Memorial Sloan Kettering Cancer Center, New York, NY, USA."
+         },
+         {
+          "affiliation": "Department of Medicine, Weill Cornell Medical Center, New York, NY, USA."
+         }
+        ]
+       }
+      },
+      {
+       "fullName": "Scher HI",
+       "firstName": "Howard I",
+       "lastName": "Scher",
+       "initials": "HI",
+       "authorAffiliationDetailsList": {
+        "authorAffiliation": [
+         {
+          "affiliation": "Department of Medicine, Memorial Sloan Kettering Cancer Center, New York, NY, USA."
+         },
+         {
+          "affiliation": "Department of Medicine, Weill Cornell Medical Center, New York, NY, USA."
+         }
+        ]
+       }
+      },
+      {
+       "fullName": "Baselga J",
+       "firstName": "Jose",
+       "lastName": "Baselga",
+       "initials": "J",
+       "authorAffiliationDetailsList": {
+        "authorAffiliation": [
+         {
+          "affiliation": "Department of Medicine, Memorial Sloan Kettering Cancer Center, New York, NY, USA."
+         },
+         {
+          "affiliation": "Department of Medicine, Weill Cornell Medical Center, New York, NY, USA."
+         }
+        ]
+       }
+      },
+      {
+       "fullName": "Razavi P",
+       "firstName": "Pedram",
+       "lastName": "Razavi",
+       "initials": "P",
+       "authorId": {
+        "type": "ORCID",
+        "value": "0000-0003-4236-0576"
+       },
+       "authorAffiliationDetailsList": {
+        "authorAffiliation": [
+         {
+          "affiliation": "Department of Medicine, Memorial Sloan Kettering Cancer Center, New York, NY, USA."
+         },
+         {
+          "affiliation": "Department of Medicine, Weill Cornell Medical Center, New York, NY, USA."
+         }
+        ]
+       }
+      },
+      {
+       "fullName": "Klebanoff CA",
+       "firstName": "Christopher A",
+       "lastName": "Klebanoff",
+       "initials": "CA",
+       "authorId": {
+        "type": "ORCID",
+        "value": "0000-0001-9645-3896"
+       },
+       "authorAffiliationDetailsList": {
+        "authorAffiliation": [
+         {
+          "affiliation": "Department of Medicine, Memorial Sloan Kettering Cancer Center, New York, NY, USA."
+         },
+         {
+          "affiliation": "Department of Medicine, Weill Cornell Medical Center, New York, NY, USA."
+         }
+        ]
+       }
+      },
+      {
+       "fullName": "Yaeger R",
+       "firstName": "Rona",
+       "lastName": "Yaeger",
+       "initials": "R",
+       "authorAffiliationDetailsList": {
+        "authorAffiliation": [
+         {
+          "affiliation": "Department of Medicine, Memorial Sloan Kettering Cancer Center, New York, NY, USA."
+         },
+         {
+          "affiliation": "Department of Medicine, Weill Cornell Medical Center, New York, NY, USA."
+         }
+        ]
+       }
+      },
+      {
+       "fullName": "Segal NH",
+       "firstName": "Neil H",
+       "lastName": "Segal",
+       "initials": "NH",
+       "authorAffiliationDetailsList": {
+        "authorAffiliation": [
+         {
+          "affiliation": "Department of Medicine, Memorial Sloan Kettering Cancer Center, New York, NY, USA."
+         },
+         {
+          "affiliation": "Department of Medicine, Weill Cornell Medical Center, New York, NY, USA."
+         }
+        ]
+       }
+      },
+      {
+       "fullName": "Ku GY",
+       "firstName": "Geoffrey Y",
+       "lastName": "Ku",
+       "initials": "GY",
+       "authorAffiliationDetailsList": {
+        "authorAffiliation": [
+         {
+          "affiliation": "Department of Medicine, Memorial Sloan Kettering Cancer Center, New York, NY, USA."
+         },
+         {
+          "affiliation": "Department of Medicine, Weill Cornell Medical Center, New York, NY, USA."
+         }
+        ]
+       }
+      },
+      {
+       "fullName": "DeMatteo RP",
+       "firstName": "Ronald P",
+       "lastName": "DeMatteo",
+       "initials": "RP",
+       "authorId": {
+        "type": "ORCID",
+        "value": "0000-0002-7021-8852"
+       },
+       "authorAffiliationDetailsList": {
+        "authorAffiliation": [
+         {
+          "affiliation": "Department of Surgery, Memorial Sloan Kettering Cancer Center, New York, NY, USA."
+         }
+        ]
+       }
+      },
+      {
+       "fullName": "Ladanyi M",
+       "firstName": "Marc",
+       "lastName": "Ladanyi",
+       "initials": "M",
+       "authorAffiliationDetailsList": {
+        "authorAffiliation": [
+         {
+          "affiliation": "Human Oncology and Pathogenesis Program, Memorial Sloan Kettering Cancer Center, New York, NY, USA."
+         },
+         {
+          "affiliation": "Department of Pathology, Memorial Sloan Kettering Cancer Center, New York, NY, USA."
+         }
+        ]
+       }
+      },
+      {
+       "fullName": "Rizvi NA",
+       "firstName": "Naiyer A",
+       "lastName": "Rizvi",
+       "initials": "NA",
+       "authorAffiliationDetailsList": {
+        "authorAffiliation": [
+         {
+          "affiliation": "Department of Medicine, Columbia University Medical Center, New York, NY, USA."
+         }
+        ]
+       }
+      },
+      {
+       "fullName": "Berger MF",
+       "firstName": "Michael F",
+       "lastName": "Berger",
+       "initials": "MF",
+       "authorAffiliationDetailsList": {
+        "authorAffiliation": [
+         {
+          "affiliation": "Department of Medicine, Memorial Sloan Kettering Cancer Center, New York, NY, USA."
+         },
+         {
+          "affiliation": "Department of Pathology, Memorial Sloan Kettering Cancer Center, New York, NY, USA."
+         }
+        ]
+       }
+      },
+      {
+       "fullName": "Riaz N",
+       "firstName": "Nadeem",
+       "lastName": "Riaz",
+       "initials": "N",
+       "authorId": {
+        "type": "ORCID",
+        "value": "0000-0001-9873-5862"
+       },
+       "authorAffiliationDetailsList": {
+        "authorAffiliation": [
+         {
+          "affiliation": "Department of Radiation Oncology, Memorial Sloan Kettering Cancer Center, New York, NY, USA."
+         },
+         {
+          "affiliation": "Human Oncology and Pathogenesis Program, Memorial Sloan Kettering Cancer Center, New York, NY, USA."
+         },
+         {
+          "affiliation": "Immunogenomics and Precision Oncology Platform, Memorial Sloan Kettering Cancer Center, New York, NY, USA."
+         }
+        ]
+       }
+      },
+      {
+       "fullName": "Solit DB",
+       "firstName": "David B",
+       "lastName": "Solit",
+       "initials": "DB",
+       "authorId": {
+        "type": "ORCID",
+        "value": "0000-0002-6614-802X"
+       },
+       "authorAffiliationDetailsList": {
+        "authorAffiliation": [
+         {
+          "affiliation": "Human Oncology and Pathogenesis Program, Memorial Sloan Kettering Cancer Center, New York, NY, USA. solitd@mskcc.org."
+         },
+         {
+          "affiliation": "Department of Medicine, Memorial Sloan Kettering Cancer Center, New York, NY, USA. solitd@mskcc.org."
+         }
+        ]
+       }
+      },
+      {
+       "fullName": "Chan TA",
+       "firstName": "Timothy A",
+       "lastName": "Chan",
+       "initials": "TA",
+       "authorId": {
+        "type": "ORCID",
+        "value": "0000-0002-9265-0283"
+       },
+       "authorAffiliationDetailsList": {
+        "authorAffiliation": [
+         {
+          "affiliation": "Department of Radiation Oncology, Memorial Sloan Kettering Cancer Center, New York, NY, USA. chant@mskcc.org."
+         },
+         {
+          "affiliation": "Human Oncology and Pathogenesis Program, Memorial Sloan Kettering Cancer Center, New York, NY, USA. chant@mskcc.org."
+         },
+         {
+          "affiliation": "Immunogenomics and Precision Oncology Platform, Memorial Sloan Kettering Cancer Center, New York, NY, USA. chant@mskcc.org."
+         }
+        ]
+       }
+      },
+      {
+       "fullName": "Morris LGT",
+       "firstName": "Luc G T",
+       "lastName": "Morris",
+       "initials": "LGT",
+       "authorId": {
+        "type": "ORCID",
+        "value": "0000-0002-4417-2280"
+       },
+       "authorAffiliationDetailsList": {
+        "authorAffiliation": [
+         {
+          "affiliation": "Human Oncology and Pathogenesis Program, Memorial Sloan Kettering Cancer Center, New York, NY, USA. morrisl@mskcc.org."
+         },
+         {
+          "affiliation": "Immunogenomics and Precision Oncology Platform, Memorial Sloan Kettering Cancer Center, New York, NY, USA. morrisl@mskcc.org."
+         },
+         {
+          "affiliation": "Department of Surgery, Memorial Sloan Kettering Cancer Center, New York, NY, USA. morrisl@mskcc.org."
+         }
+        ]
+       }
+      }
+     ]
+    },
+    "authorIdList": {
+     "authorId": [
+      {
+       "type": "ORCID",
+       "value": "0000-0001-5204-3465"
+      },
+      {
+       "type": "ORCID",
+       "value": "0000-0001-5406-4104"
+      },
+      {
+       "type": "ORCID",
+       "value": "0000-0001-5511-0635"
+      },
+      {
+       "type": "ORCID",
+       "value": "0000-0001-6860-2401"
+      },
+      {
+       "type": "ORCID",
+       "value": "0000-0001-6925-2327"
+      },
+      {
+       "type": "ORCID",
+       "value": "0000-0001-9645-3896"
+      },
+      {
+       "type": "ORCID",
+       "value": "0000-0001-9873-5862"
+      },
+      {
+       "type": "ORCID",
+       "value": "0000-0002-2670-9777"
+      },
+      {
+       "type": "ORCID",
+       "value": "0000-0002-4347-8149"
+      },
+      {
+       "type": "ORCID",
+       "value": "0000-0002-4417-2280"
+      },
+      {
+       "type": "ORCID",
+       "value": "0000-0002-5093-6099"
+      },
+      {
+       "type": "ORCID",
+       "value": "0000-0002-6614-802X"
+      },
+      {
+       "type": "ORCID",
+       "value": "0000-0002-7021-8852"
+      },
+      {
+       "type": "ORCID",
+       "value": "0000-0002-8065-4412"
+      },
+      {
+       "type": "ORCID",
+       "value": "0000-0002-9265-0283"
+      },
+      {
+       "type": "ORCID",
+       "value": "0000-0003-0818-3895"
+      },
+      {
+       "type": "ORCID",
+       "value": "0000-0003-1882-1088"
+      },
+      {
+       "type": "ORCID",
+       "value": "0000-0003-4064-8891"
+      },
+      {
+       "type": "ORCID",
+       "value": "0000-0003-4236-0576"
+      },
+      {
+       "type": "ORCID",
+       "value": "0009-0006-3905-1536"
+      }
+     ]
+    },
+    "dataLinksTagsList": {
+     "dataLinkstag": [
+      "altmetrics",
+      "supporting_data"
+     ]
+    },
+    "journalInfo": {
+     "issue": "2",
+     "volume": "51",
+     "journalIssueId": 2776048,
+     "dateOfPublication": "2019 Feb",
+     "monthOfPublication": 2,
+     "yearOfPublication": 2019,
+     "printPublicationDate": "2019-02-01",
+     "journal": {
+      "title": "Nature genetics",
+      "medlineAbbreviation": "Nat Genet",
+      "issn": "1061-4036",
+      "essn": "1546-1718",
+      "isoabbreviation": "Nat Genet",
+      "nlmid": "9216904"
+     }
+    },
+    "pubYear": "2019",
+    "pageInfo": "202-206",
+    "abstractText": "Immune checkpoint inhibitor (ICI) treatments benefit some patients with metastatic cancers, but predictive biomarkers are needed. Findings in selected cancer types suggest that tumor mutational burden (TMB) may predict clinical response to ICI. To examine this association more broadly, we analyzed the clinical and genomic data of 1,662 advanced cancer patients treated with ICI, and 5,371 non-ICI-treated patients, whose tumors underwent targeted next-generation sequencing (MSK-IMPACT). Among all patients, higher somatic TMB (highest 20% in each histology) was associated with better overall survival. For most cancer histologies, an association between higher TMB and improved survival was observed. The TMB cutpoints associated with improved survival varied markedly between cancer types. These data indicate that TMB is associated with improved survival in patients receiving ICI across a wide variety of cancer types, but that there may not be one universal definition of high TMB.",
+    "affiliation": "Department of Radiation Oncology, Memorial Sloan Kettering Cancer Center, New York, NY, USA.",
+    "publicationStatus": "ppublish",
+    "language": "eng",
+    "pubModel": "Print-Electronic",
+    "pubTypeList": {
+     "pubType": [
+      "Research Support, Non-U.S. Gov't",
+      "research-article",
+      "Journal Article",
+      "Research Support, N.I.H., Extramural"
+     ]
+    },
+    "grantsList": {
+     "grant": [
+      {
+       "grantId": "R01 DE027738",
+       "agency": "NIDCR NIH HHS",
+       "acronym": "DE",
+       "orderIn": 0
+      },
+      {
+       "grantId": "K08 DE024774",
+       "agency": "NIDCR NIH HHS",
+       "acronym": "DE",
+       "orderIn": 0
+      },
+      {
+       "grantId": "P50 CA221745",
+       "agency": "NCI NIH HHS",
+       "acronym": "CA",
+       "orderIn": 0
+      },
+      {
+       "grantId": "P30 CA008748",
+       "agency": "NCI NIH HHS",
+       "acronym": "CA",
+       "orderIn": 0
+      },
+      {
+       "grantId": "R01 CA205426",
+       "agency": "NCI NIH HHS",
+       "acronym": "CA",
+       "orderIn": 0
+      },
+      {
+       "grantId": "R35 CA232097",
+       "agency": "NCI NIH HHS",
+       "acronym": "CA",
+       "orderIn": 0
+      }
+     ]
+    },
+    "meshHeadingList": {
+     "meshHeading": [
+      {
+       "majorTopic_YN": "N",
+       "descriptorName": "Humans"
+      },
+      {
+       "majorTopic_YN": "N",
+       "descriptorName": "Neoplasms",
+       "meshQualifierList": {
+        "meshQualifier": [
+         {
+          "abbreviation": "GE",
+          "qualifierName": "genetics",
+          "majorTopic_YN": "Y"
+         },
+         {
+          "abbreviation": "IM",
+          "qualifierName": "immunology",
+          "majorTopic_YN": "N"
+         },
+         {
+          "abbreviation": "TH",
+          "qualifierName": "therapy",
+          "majorTopic_YN": "Y"
+         }
+        ]
+       }
+      },
+      {
+       "majorTopic_YN": "N",
+       "descriptorName": "Antineoplastic Agents",
+       "meshQualifierList": {
+        "meshQualifier": [
+         {
+          "abbreviation": "IM",
+          "qualifierName": "immunology",
+          "majorTopic_YN": "N"
+         }
+        ]
+       }
+      },
+      {
+       "majorTopic_YN": "N",
+       "descriptorName": "Immunotherapy",
+       "meshQualifierList": {
+        "meshQualifier": [
+         {
+          "abbreviation": "MT",
+          "qualifierName": "methods",
+          "majorTopic_YN": "N"
+         }
+        ]
+       }
+      },
+      {
+       "majorTopic_YN": "N",
+       "descriptorName": "Tumor Burden",
+       "meshQualifierList": {
+        "meshQualifier": [
+         {
+          "abbreviation": "GE",
+          "qualifierName": "genetics",
+          "majorTopic_YN": "N"
+         },
+         {
+          "abbreviation": "IM",
+          "qualifierName": "immunology",
+          "majorTopic_YN": "N"
+         }
+        ]
+       }
+      },
+      {
+       "majorTopic_YN": "N",
+       "descriptorName": "Mutation",
+       "meshQualifierList": {
+        "meshQualifier": [
+         {
+          "abbreviation": "GE",
+          "qualifierName": "genetics",
+          "majorTopic_YN": "Y"
+         }
+        ]
+       }
+      },
+      {
+       "majorTopic_YN": "N",
+       "descriptorName": "High-Throughput Nucleotide Sequencing",
+       "meshQualifierList": {
+        "meshQualifier": [
+         {
+          "abbreviation": "MT",
+          "qualifierName": "methods",
+          "majorTopic_YN": "N"
+         }
+        ]
+       }
+      }
+     ]
+    },
+    "chemicalList": {
+     "chemical": [
+      {
+       "name": "Antineoplastic Agents",
+       "registryNumber": "0"
+      }
+     ]
+    },
+    "subsetList": {
+     "subset": [
+      {
+       "code": "IM",
+       "name": "Index Medicus"
+      }
+     ]
+    },
+    "fullTextUrlList": {
+     "fullTextUrl": [
+      {
+       "availability": "Subscription required",
+       "availabilityCode": "S",
+       "documentStyle": "doi",
+       "site": "DOI",
+       "url": "https://doi.org/10.1038/s41588-018-0312-8"
+      },
+      {
+       "availability": "Free",
+       "availabilityCode": "F",
+       "documentStyle": "html",
+       "site": "Europe_PMC",
+       "url": "https://europepmc.org/articles/PMC6365097"
+      },
+      {
+       "availability": "Free",
+       "availabilityCode": "F",
+       "documentStyle": "pdf",
+       "site": "Europe_PMC",
+       "url": "https://europepmc.org/articles/PMC6365097?pdf=render"
+      },
+      {
+       "availability": "Free",
+       "availabilityCode": "F",
+       "documentStyle": "doi",
+       "site": "DOI",
+       "url": "https://doi.org/10.1038/s41588-018-0312-8"
+      }
+     ]
+    },
+    "isOpenAccess": "N",
+    "inEPMC": "Y",
+    "inPMC": "Y",
+    "hasPDF": "Y",
+    "hasBook": "N",
+    "hasSuppl": "Y",
+    "citedByCount": 3165,
+    "hasData": "Y",
+    "hasReferences": "Y",
+    "hasTextMinedTerms": "Y",
+    "hasDbCrossReferences": "N",
+    "hasLabsLinks": "Y",
+    "hasEvaluations": "N",
+    "authMan": "Y",
+    "epmcAuthMan": "N",
+    "nihAuthMan": "Y",
+    "manuscriptId": "NIHMS1009107",
+    "hasTMAccessionNumbers": "Y",
+    "tmAccessionTypeList": {
+     "accessionType": [
+      "nct"
+     ]
+    },
+    "dateOfCompletion": "2019-04-24",
+    "dateOfCreation": "2019-01-16",
+    "firstIndexDate": "2019-01-16",
+    "fullTextReceivedDate": "2025-02-03",
+    "dateOfRevision": "2023-09-15",
+    "electronicPublicationDate": "2019-01-14",
+    "firstPublicationDate": "2019-01-14",
+    "embargoDate": "2020-02-01"
+   }
+  ]
+ }
+}

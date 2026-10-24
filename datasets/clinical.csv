@@ -1,0 +1,7 @@
+patient_id,cancer_type,stage,age,tumor_volume_cm3,treatment,months_followup
+P001,LUAD,3,64,42.5,chemo_immuno,18
+P002,BRCA,2,51,18.2,hormone,24
+P003,COAD,4,72,88.9,chemo,9
+P004,LUAD,1,58,6.4,surgery,36
+P005,GBM,4,49,61.3,radio_chemo,11
+P006,BRCA,3,66,33.1,chemo_immuno,21

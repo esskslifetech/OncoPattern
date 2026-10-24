@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# runtests — build and run every OncoPattern certificate, then summarise.
+set -u
+cd "$(dirname "$0")/.."
+TESTS="test_ingest test_pattern test_simulation test_visual test_fs_log test_scan test_report test_gui_render test_integration"
+printf "%-22s %8s %8s %8s   %s\n" MODULE TOTAL PASS FAIL RESULT
+printf -- "----------------------------------------------------------------\n"
+gt=0; gp=0; gf=0; bad=0
+for t in $TESTS; do
+    if ! out=$(tools/ocbuild run "test/$t.tech" "$t" 2>&1); then
+        printf "%-22s %8s %8s %8s   BUILD/RUN ERROR\n" "$t" - - -
+        bad=$((bad+1)); continue
+    fi
+    line=$(tail -1 "results/$t.txt")
+    tot=$(echo "$line" | awk '{print $2}')
+    pas=$(echo "$line" | awk '{print $4}')
+    fai=$(echo "$line" | awk '{print $6}')
+    gt=$((gt+tot)); gp=$((gp+pas)); gf=$((gf+fai))
+    if [ "$fai" = "0" ]; then res="PASS"; else res="FAIL"; bad=$((bad+1)); fi
+    printf "%-22s %8s %8s %8s   %s\n" "$t" "$tot" "$pas" "$fai" "$res"
+done
+# the tests write scratch artefacts (underscore-prefixed) and each links its
+# own copy of the program; neither is a deliverable
+rm -f results/_* 
+for t in $TESTS; do rm -f "dist/$t.tech" "dist/$t.tbc"; done
+rm -f dist/t_cross.tech dist/t_cross.tbc
+
+printf -- "----------------------------------------------------------------\n"
+printf "%-22s %8s %8s %8s\n" TOTAL "$gt" "$gp" "$gf"
+[ "$bad" = "0" ] && echo "ALL CERTIFICATES PASS" || echo "$bad module(s) failing"
+exit $bad

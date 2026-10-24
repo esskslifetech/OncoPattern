@@ -1,0 +1,200 @@
+# ============================================================================
+# test_scan.tech — real patent ingest, the exhaustive signal sweep, and the
+# invented composite signals.
+#
+# The patent assertions are checked against the live EPO figures recorded in
+# datasets/patents.json (IPC A61P35/00, retrieved by tools/fetch_patents.py),
+# so this certificate also detects a corrupted or truncated download.
+# ============================================================================
+
+IMPORT oncopattern/test/harness
+IMPORT oncopattern/pattern/novel
+IMPORT oncopattern/data/ingest_vcf
+IMPORT oncopattern/data/ingest_json
+IMPORT oncopattern/data/ingest_papers
+
+t_begin(strbuf("ONCOPATTERN — SIGNAL SCAN + PATENT LANDSCAPE CERTIFICATE"))
+
+params_init()
+params_set_type(CT_LUAD)
+vcf_load(strbuf("ocdata/variants_P001_t0.vcf"))
+expr_load(strbuf("ocdata/expression.csv"))
+img_load(strbuf("ocdata/histology.pgm"))
+json_graph_load(strbuf("ocdata/pathway.json"))
+
+# ---- real patent data
+DECL ng : int<64> = patents_load(strbuf("ocdata/patents.json"))
+t_eqi(strbuf("patents: 40 genes surveyed"), ng, 40)
+t_eqi(strbuf("patents: loaded flag set"), g_pt_loaded, 1)
+t_eqi(strbuf("patents: 12 IPC classes"), g_pt_cls_n, 12)
+t_eqi(strbuf("patents: 15 years of velocity"), g_pt_vel_n, 15)
+t_eqi(strbuf("patents: velocity starts 2010"), g_pt_year0, 2010)
+t_true(strbuf("patents: applicants ranked"), oc_gt0(g_pt_app_n))
+t_true(strbuf("patents: retrieval date recorded"), oc_gt0(g_pt_ret_len))
+
+# every element of every array must have parsed, not just the first
+t_true(strbuf("parse: EGFR coverage read"), oc_gt0(g_pt_gene[0]))
+t_true(strbuf("parse: last gene slot reachable"), oc_ge(g_pt_gene[39], 0.0))
+t_true(strbuf("parse: first IPC class counted"), oc_gt0(g_pt_cls_count[0]))
+t_true(strbuf("parse: last IPC class counted"), oc_gt0(g_pt_cls_count[11]))
+t_true(strbuf("parse: first velocity year read"), oc_gt0(g_pt_vel[0]))
+t_true(strbuf("parse: last velocity year read"), oc_gt0(g_pt_vel[14]))
+t_true(strbuf("parse: class labels resolve"), oc_gt0(len(pt_class_label(2))))
+t_true(strbuf("parse: class codes resolve"), oc_gt0(len(pt_class_name(0))))
+t_true(strbuf("parse: applicant names resolve"), oc_gt0(len(pt_applicant(0))))
+
+# the oncology class must dominate the specialised ones, and the panel totals
+# must be internally consistent
+t_true(strbuf("landscape: A61P35/00 is the largest class"), oc_ge(g_pt_cls_count[0], g_pt_cls_count[2]))
+t_true(strbuf("landscape: gene coverage totals > 0"), oc_gt0(g_pt_gene_total))
+t_true(strbuf("landscape: busiest gene identified"), oc_gt0(g_pt_gene_max))
+t_range(strbuf("landscape: normalised coverage in [0,1]"), pt_gene_norm(0), 0.0, 1.0)
+t_true(strbuf("landscape: filings are growing"), oc_gt(pt_velocity_slope(), 0.0))
+t_range(strbuf("landscape: CAGR plausible"), pt_velocity_cagr(), 0.0, 0.50)
+t_range(strbuf("landscape: applicant HHI in [0,1]"), pt_applicant_hhi(), 0.0, 1.0)
+
+# ---- real published literature (Europe PMC)
+DECL nr : int<64> = papers_load(strbuf("ocdata/papers.json"))
+t_eqi(strbuf("papers: 24 evidence references"), nr, 24)
+t_eqi(strbuf("papers: loaded flag set"), g_pp_loaded, 1)
+t_eqi(strbuf("papers: every reference title-verified"), g_pp_ref_ok, 24)
+t_eqi(strbuf("papers: 40 genes surveyed"), g_pp_gene_n, 40)
+t_eqi(strbuf("papers: 15 years of velocity"), g_pp_vel_n, 15)
+t_true(strbuf("papers: retrieval date recorded"), oc_gt0(g_pp_ret_len))
+
+# the citations must actually have parsed, first record to last
+t_true(strbuf("refs: first title read"), oc_gt0(len(pp_title(0))))
+t_true(strbuf("refs: last title read"), oc_gt0(len(pp_title(23))))
+t_true(strbuf("refs: journals resolve"), oc_gt0(len(pp_journal(16))))
+t_true(strbuf("refs: PMIDs resolve"), oc_gt0(len(pp_pmid(17))))
+t_true(strbuf("refs: DOIs resolve"), oc_gt0(len(pp_doi(0))))
+t_true(strbuf("refs: what each backs is recorded"), oc_gt0(len(pp_backs(0))))
+t_true(strbuf("refs: keys resolve"), oc_gt0(len(pp_key(0))))
+t_true(strbuf("refs: citation counts positive"), oc_gt0(pp_total_citations()))
+t_range(strbuf("refs: oldest is a real year"), pp_oldest_year(), 1900.0, 2026.0)
+t_range(strbuf("refs: coverage in [0,1]"), pp_coverage(), 0.0, 1.0)
+t_eqf(strbuf("refs: coverage is complete"), pp_coverage(), 1.0, 0.0)
+t_true(strbuf("literature: papers per year growing"), oc_gt(pp_velocity_slope(), 0.0))
+t_range(strbuf("literature: CAGR plausible"), pp_velocity_cagr(), 0.0, 0.5)
+t_true(strbuf("literature: first year read"), oc_gt0(g_pp_vel[0]))
+t_true(strbuf("literature: last year read"), oc_gt0(g_pp_vel[14]))
+t_true(strbuf("literature: EGFR is well studied"), oc_gt0(g_pp_gene[0]))
+t_range(strbuf("literature: normalised attention in [0,1]"), pp_gene_norm(0), 0.0, 1.0)
+
+# ---- the sweep
+pat_reset()
+detect_all()
+classify_all()
+DECL n : int<64> = scan_all()
+t_true(strbuf("scan: over 200 signals measured"), oc_gt0(n - 200))
+t_eqi(strbuf("scan: table length matches"), sc_n, n)
+t_eqi(strbuf("scan: one signal per gene"), scan_count_in(CH_EXPR), g_expr_g + g_expr_s + 8)
+t_true(strbuf("scan: variant channel populated"), oc_gt0(scan_count_in(CH_VAR)))
+t_eqi(strbuf("scan: image channel signals"), scan_count_in(CH_IMG), 13)
+t_eqi(strbuf("scan: graph channel signals"), scan_count_in(CH_GRAPH), g_node_n + 2)
+t_eqi(strbuf("scan: patent channel signals"), scan_count_in(CH_PAT), 40 + 12 + 3)
+t_eqi(strbuf("scan: literature channel signals"), scan_count_in(CH_LIT), 40 + 6)
+t_eqi(strbuf("scan: simulation sensitivities"), scan_count_in(CH_SIM), 6)
+t_true(strbuf("scan: some signals are significant"), oc_gt0(scan_significant()))
+
+# ranking must be a permutation, ordered by descending |z|
+DECL seen : int<64> = 0
+DECL i : int<64> = 0
+WHILE i < sc_n {
+    IF sc_rank[i] >= 0 {
+        IF sc_rank[i] < sc_n {
+            seen = seen + 1
+        }
+    }
+    i = i + 1
+}
+t_eqi(strbuf("rank: every id in range"), seen, sc_n)
+DECL ordered : int<64> = 1
+i = 1
+WHILE i < sc_n {
+    IF oc_fabs(sc_z[sc_rank[i]]) > oc_fabs(sc_z[sc_rank[i - 1]]) + 0.000001 {
+        ordered = 0
+    }
+    i = i + 1
+}
+t_eqi(strbuf("rank: sorted by descending |z|"), ordered, 1)
+
+# the strongest expression signals must be the seeded driver block
+DECL top_is_driver : int<64> = 0
+DECL r : int<64> = 0
+WHILE r < 12 {
+    DECL id : int<64> = sc_rank[r]
+    IF sc_chan[id] == CH_EXPR {
+        IF sc_aux[id] < 8 {
+            top_is_driver = top_is_driver + 1
+        }
+    }
+    r = r + 1
+}
+t_true(strbuf("scan: seeded drivers rank near the top"), oc_gt0(top_is_driver - 2))
+t_true(strbuf("scan: AURKA effect size is large"), oc_gt(sc_val[sc_find(CH_EXPR, 7)], 10.0))
+t_true(strbuf("scan: immune block is down-regulated"), oc_lt(sc_val[sc_find(CH_EXPR, 31)], 0.0))
+t_true(strbuf("scan: channel names resolve"), oc_gt0(len(scan_chan_name(CH_NOVEL))))
+t_true(strbuf("scan: unit names resolve"), oc_gt0(len(scan_unit(3))))
+
+# substitution spectrum must be a probability distribution
+DECL spec : float<64> = 0.0
+DECL b : int<64> = 0
+WHILE b < 16 {
+    DECL sid : int<64> = sc_find(CH_VAR, 40 + b)
+    IF sid >= 0 {
+        spec = spec + sc_val[sid]
+    }
+    b = b + 1
+}
+t_eqf(strbuf("spectrum: 12 classes sum to 1"), spec, 1.0, 0.0001)
+t_true(strbuf("spectrum: entropy positive"), oc_gt(sc_val[sc_find(CH_VAR, 60)], 0.0))
+t_range(strbuf("spectrum: entropy <= log2(12)"), sc_val[sc_find(CH_VAR, 60)], 0.0, 3.585)
+
+# image bands are fractions of one field
+DECL bands : float<64> = 0.0
+b = 0
+WHILE b < 8 {
+    bands = bands + sc_val[sc_find(CH_IMG, b)]
+    b = b + 1
+}
+t_eqf(strbuf("image: intensity bands sum to 1"), bands, 1.0, 0.001)
+t_range(strbuf("image: fractal dimension plausible"), sc_val[sc_find(CH_IMG, 24)], 0.5, 2.5)
+
+# ---- the invented signals
+DECL nv : int<64> = novel_all()
+t_eqi(strbuf("novel: nine composites registered"), nv, 9)
+t_eqi(strbuf("novel: published into the scan table"), scan_count_in(CH_NOVEL), 9)
+t_true(strbuf("novel: abbreviations resolve"), oc_gt0(len(nv_abbr(0))))
+t_true(strbuf("novel: descriptions resolve"), oc_gt0(len(nv_name(0))))
+t_true(strbuf("TOI: a target was selected"), oc_ge(nv_toi_gene, 0.0))
+t_true(strbuf("TOI: its biology is strong"), oc_gt(nv_toi_bio, 1.0))
+t_true(strbuf("TOI: index exceeds the panel median"), oc_gt(nv_val[0], 0.0))
+t_range(strbuf("ICI: crowding index in [0,1]"), nv_val[1], 0.0, 1.0)
+t_range(strbuf("HIA: antagonism in [0,1]"), nv_val[2], 0.0, 1.0)
+t_range(strbuf("MGC: concordance in [0,1]"), nv_val[3], 0.0, 1.0)
+t_range(strbuf("AEA: alignment is a correlation"), nv_val[4], -1.0, 1.0)
+t_true(strbuf("ODC: orphan drivers counted"), oc_ge(nv_val[5], 0.0))
+
+# TOI must actually favour thin IP: the chosen target may not be the most
+# heavily patented gene in the panel
+t_true(strbuf("TOI: target is not the IP leader"), oc_lt(novel_toi_patents(), g_pt_gene_max))
+
+# ---- the three-way evidence triangle
+t_true(strbuf("NDS: a neglected target was chosen"), oc_ge(nv_nds_gene, 0.0))
+t_true(strbuf("NDS: it is not the most-published gene"), oc_lt(nv_nds_pap, g_pp_gene_max))
+t_true(strbuf("NDS: score exceeds zero"), oc_gt(nv_val[6], 0.0))
+t_true(strbuf("RIL: both curves compared"), oc_gt(nv_val[7], 0.0))
+t_range(strbuf("ESI: evidence index in [0,1]"), nv_val[8], 0.0, 1.0)
+t_true(strbuf("ESI: platform is well cited"), oc_gt(nv_val[8], 0.5))
+t_true(strbuf("triangle: TOI target has papers on record"), oc_ge(novel_toi_papers(), 0.0))
+
+# ---- determinism
+DECL z0 : float<64> = sc_z[sc_rank[0]]
+DECL v0 : float<64> = nv_val[0]
+scan_all()
+novel_all()
+t_eqf(strbuf("determinism: same top-ranked z"), sc_z[sc_rank[0]], z0, 0.0)
+t_eqf(strbuf("determinism: same TOI value"), nv_val[0], v0, 0.0)
+
+YIELD t_end(strbuf("ocout/test_scan.txt"))

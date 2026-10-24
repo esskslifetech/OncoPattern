@@ -1,0 +1,809 @@
+# ============================================================================
+# oncopattern/pattern/scan.tech — exhaustive signal sweep.
+#
+# The detectors in detect.tech answer specific, pre-registered questions.  This
+# module does the opposite: it enumerates EVERY signal the loaded data can
+# support, measures each one, standardises them within their channel, and ranks
+# the whole set.  Nothing is pre-selected — a signal earns its place by its
+# effect size.
+#
+#   channel      what is swept                                        signals
+#   -----------  --------------------------------------------------  -------
+#   expression   every gene (tumour vs normal effect size)                 40
+#                every sample (deviation from the panel)                   12
+#                every gene pair, top co-expression by |r|                  8
+#   variant      every chromosome (density)                             <= 24
+#                every substitution class (12) + spectrum entropy          13
+#                quality / depth moments                                    5
+#   image        intensity histogram bands                                  8
+#                GLCM texture + gradient energy + box-counting dimension    5
+#   graph        every organ node (weighted degree) + edge statistics    <= 9
+#   patents      every gene (real EPO coverage)                            40
+#                every IPC class + velocity slope, CAGR, applicant HHI      15
+#   literature   every gene (real Europe PMC coverage)                      40
+#                evidence coverage, citations, velocity, oldest reference    6
+#   simulation   parameter sensitivities (finite-difference)                 6
+#
+# Roughly 185 measured signals per run.  scan_rank() orders them by |z| so the
+# report can show what actually stands out rather than what was expected to.
+#
+# META @module(name:pat_scan, provides:scan_all, requires:pat_detect,patents)
+# ============================================================================
+
+IMPORT oncopattern/pattern/detect
+IMPORT oncopattern/pattern/classify
+IMPORT oncopattern/pattern/physical
+IMPORT oncopattern/data/ingest_patents
+IMPORT oncopattern/data/ingest_papers
+
+DECL SC_MAX   : int<64> = 512
+DECL CH_EXPR  : int<64> = 0
+DECL CH_VAR   : int<64> = 1
+DECL CH_IMG   : int<64> = 2
+DECL CH_GRAPH : int<64> = 3
+DECL CH_PAT   : int<64> = 4
+DECL CH_SIM   : int<64> = 5
+DECL CH_LIT   : int<64> = 6
+DECL CH_NOVEL : int<64> = 7
+DECL CH_N     : int<64> = 8
+
+DECL sc_val   : buf<512, float<64>> = null    # the measured statistic
+DECL sc_z     : buf<512, float<64>> = null    # standardised within channel
+DECL sc_chan  : buf<512, int<64>>   = null
+DECL sc_aux   : buf<512, int<64>>   = null    # index within the channel
+DECL sc_off   : buf<512, int<64>>   = null
+DECL sc_len   : buf<512, int<64>>   = null
+DECL sc_rank  : buf<512, int<64>>   = null    # signal ids, best first
+DECL sc_names : buf<24576> = null
+DECL sc_nn    : int<64> = 0
+DECL sc_n     : int<64> = 0
+DECL sc_unit  : buf<512, int<64>>   = null    # unit code, see scan_unit()
+
+FUNC scan_reset() {
+    sc_n = 0
+    sc_nn = 0
+}
+
+FUNC scan_unit(u : int<64>) : buf<> {
+    MATCH u {
+        CASE 0 {
+            RETURN strbuf("effect size")
+        }
+        CASE 1 {
+            RETURN strbuf("count")
+        }
+        CASE 2 {
+            RETURN strbuf("fraction")
+        }
+        CASE 3 {
+            RETURN strbuf("correlation")
+        }
+        CASE 4 {
+            RETURN strbuf("per Mb")
+        }
+        CASE 5 {
+            RETURN strbuf("bits")
+        }
+        CASE 6 {
+            RETURN strbuf("docs")
+        }
+        CASE 7 {
+            RETURN strbuf("docs/year")
+        }
+        CASE 8 {
+            RETURN strbuf("index")
+        }
+        CASE 9 {
+            RETURN strbuf("papers")
+        }
+        CASE 10 {
+            RETURN strbuf("citations")
+        }
+        ELSE {
+            RETURN strbuf("ratio")
+        }
+    }
+}
+
+FUNC scan_chan_name(c : int<64>) : buf<> {
+    MATCH c {
+        CASE 0 {
+            RETURN strbuf("expression")
+        }
+        CASE 1 {
+            RETURN strbuf("variant")
+        }
+        CASE 2 {
+            RETURN strbuf("image")
+        }
+        CASE 3 {
+            RETURN strbuf("graph")
+        }
+        CASE 4 {
+            RETURN strbuf("patent")
+        }
+        CASE 5 {
+            RETURN strbuf("simulation")
+        }
+        CASE 6 {
+            RETURN strbuf("literature")
+        }
+        ELSE {
+            RETURN strbuf("novel")
+        }
+    }
+}
+
+# register one measured signal; returns its id
+FUNC sc_add(name : buf<>, chan : int<64>, aux : int<64>, unit : int<64>, v : float<64>) : int<64> {
+    IF sc_n >= SC_MAX {
+        RETURN -1
+    }
+    DECL i : int<64> = sc_n
+    sc_off[i] = sc_nn
+    sc_len[i] = len(name)
+    sc_nn = oc_cat(sc_names, sc_nn, name)
+    sc_chan[i] = chan
+    sc_aux[i] = aux
+    sc_unit[i] = unit
+    sc_val[i] = v
+    sc_z[i] = 0.0
+    sc_n = sc_n + 1
+    RETURN i
+}
+
+FUNC sc_name(i : int<64>) : buf<> {
+    RETURN slice(sc_names, sc_off[i], sc_len[i])
+}
+
+# a two-part name, "A~B", built in the pool
+DECL sc_tmp : buf<64> = null
+
+FUNC sc_add2(a : buf<>, sep : buf<>, b : buf<>, chan : int<64>, aux : int<64>, unit : int<64>, v : float<64>) : int<64> {
+    DECL n : int<64> = 0
+    n = oc_cat(sc_tmp, n, a)
+    n = oc_cat(sc_tmp, n, sep)
+    n = oc_cat(sc_tmp, n, b)
+    RETURN sc_add(slice(sc_tmp, 0, n), chan, aux, unit, v)
+}
+
+FUNC sc_addi(prefix : buf<>, k : int<64>, chan : int<64>, aux : int<64>, unit : int<64>, v : float<64>) : int<64> {
+    DECL n : int<64> = 0
+    n = oc_cat(sc_tmp, n, prefix)
+    n = oc_cati(sc_tmp, n, k)
+    RETURN sc_add(slice(sc_tmp, 0, n), chan, aux, unit, v)
+}
+
+# ===========================================================================
+# channel 0 — expression
+# ===========================================================================
+
+# Cohen's d for one gene: (mean tumour - mean normal) / pooled sd
+FUNC sc_gene_effect(g : int<64>) : float<64> {
+    DECL half : int<64> = g_expr_s //// 2
+    DECL mn : float<64> = 0.0
+    DECL mt : float<64> = 0.0
+    DECL j : int<64> = 0
+    WHILE j < half {
+        mn = mn + g_expr[g * g_expr_s + j]
+        mt = mt + g_expr[g * g_expr_s + half + j]
+        j = j + 1
+    }
+    mn = oc_div(mn, half)
+    mt = oc_div(mt, half)
+    DECL vn : float<64> = 0.0
+    DECL vt : float<64> = 0.0
+    j = 0
+    WHILE j < half {
+        DECL a : float<64> = g_expr[g * g_expr_s + j] - mn
+        DECL b : float<64> = g_expr[g * g_expr_s + half + j] - mt
+        vn = vn + a * a
+        vt = vt + b * b
+        j = j + 1
+    }
+    DECL sd : float<64> = sqrt((vn + vt) / (2.0 * half - 2.0) + OC_EPS)
+    RETURN (mt - mn) / sd
+}
+
+FUNC scan_expression() : int<64> {
+    DECL g : int<64> = 0
+    WHILE g < g_expr_g {
+        sc_add(oc_gene_name(g), CH_EXPR, g, 0, sc_gene_effect(g))
+        g = g + 1
+    }
+    RETURN g_expr_g
+}
+
+# per-sample deviation from the per-gene panel mean
+FUNC sc_sample_dev(s : int<64>) : float<64> {
+    DECL acc : float<64> = 0.0
+    DECL g : int<64> = 0
+    WHILE g < g_expr_g {
+        DECL m : float<64> = 0.0
+        DECL k : int<64> = 0
+        WHILE k < g_expr_s {
+            m = m + g_expr[g * g_expr_s + k]
+            k = k + 1
+        }
+        m = oc_div(m, g_expr_s)
+        acc = acc + oc_fabs(g_expr[g * g_expr_s + s] - m)
+        g = g + 1
+    }
+    RETURN oc_div(acc, g_expr_g)
+}
+
+FUNC scan_samples() : int<64> {
+    DECL s : int<64> = 0
+    WHILE s < g_expr_s {
+        sc_addi(strbuf("sample_"), s, CH_EXPR, 100 + s, 0, sc_sample_dev(s))
+        s = s + 1
+    }
+    RETURN g_expr_s
+}
+
+# Pearson correlation of two gene rows across all samples
+FUNC sc_corr(a : int<64>, b : int<64>) : float<64> {
+    DECL n : int<64> = g_expr_s
+    DECL ma : float<64> = 0.0
+    DECL mb : float<64> = 0.0
+    DECL i : int<64> = 0
+    WHILE i < n {
+        ma = ma + g_expr[a * n + i]
+        mb = mb + g_expr[b * n + i]
+        i = i + 1
+    }
+    ma = oc_div(ma, n)
+    mb = oc_div(mb, n)
+    DECL sab : float<64> = 0.0
+    DECL saa : float<64> = 0.0
+    DECL sbb : float<64> = 0.0
+    i = 0
+    WHILE i < n {
+        DECL da : float<64> = g_expr[a * n + i] - ma
+        DECL db : float<64> = g_expr[b * n + i] - mb
+        sab = sab + da * db
+        saa = saa + da * da
+        sbb = sbb + db * db
+        i = i + 1
+    }
+    RETURN sab / (sqrt(saa * sbb) + OC_EPS)
+}
+
+# top-K gene pairs by |r|, found by an insertion pass over all pairs
+DECL cx_a : buf<16, int<64>> = null
+DECL cx_b : buf<16, int<64>> = null
+DECL cx_r : buf<16, float<64>> = null
+DECL cx_k : int<64> = 8
+
+FUNC cx_offer(a : int<64>, b : int<64>, r : float<64>) {
+    DECL worst : int<64> = 0
+    DECL wv : float<64> = 2.0
+    DECL i : int<64> = 0
+    WHILE i < cx_k {
+        DECL av : float<64> = oc_fabs(cx_r[i])
+        IF av < wv {
+            wv = av
+            worst = i
+        }
+        i = i + 1
+    }
+    IF oc_fabs(r) > wv {
+        cx_a[worst] = a
+        cx_b[worst] = b
+        cx_r[worst] = r
+    }
+}
+
+FUNC scan_coexpression() : int<64> {
+    DECL i : int<64> = 0
+    WHILE i < cx_k {
+        cx_r[i] = 0.0
+        cx_a[i] = 0
+        cx_b[i] = 0
+        i = i + 1
+    }
+    DECL a : int<64> = 0
+    WHILE a < g_expr_g {
+        DECL b : int<64> = a + 1
+        WHILE b < g_expr_g {
+            cx_offer(a, b, sc_corr(a, b))
+            b = b + 1
+        }
+        a = a + 1
+    }
+    i = 0
+    WHILE i < cx_k {
+        sc_add2(oc_gene_name(cx_a[i]), strbuf("~"), oc_gene_name(cx_b[i]), CH_EXPR, 200 + i, 3, cx_r[i])
+        i = i + 1
+    }
+    RETURN cx_k
+}
+
+# ===========================================================================
+# channel 1 — variants
+# ===========================================================================
+DECL sv_chrom : buf<32, int<64>> = null
+DECL sv_spec  : buf<16, int<64>> = null      # ref*4 + alt
+
+FUNC scan_chromosomes() : int<64> {
+    DECL i : int<64> = 0
+    WHILE i < 32 {
+        sv_chrom[i] = 0
+        i = i + 1
+    }
+    i = 0
+    WHILE i < g_var_n {
+        DECL c : int<64> = g_var_chrom[i]
+        IF c > 0 {
+            IF c < 32 {
+                sv_chrom[c] = sv_chrom[c] + 1
+            }
+        }
+        i = i + 1
+    }
+    DECL k : int<64> = 0
+    DECL c2 : int<64> = 1
+    WHILE c2 <= 24 {
+        IF sv_chrom[c2] > 0 {
+            sc_addi(strbuf("chr"), c2, CH_VAR, c2, 4, sv_chrom[c2] / 50.0)
+            k = k + 1
+        }
+        c2 = c2 + 1
+    }
+    RETURN k
+}
+
+FUNC sc_base(c : int<64>) : buf<> {
+    MATCH c {
+        CASE 0 {
+            RETURN strbuf("A")
+        }
+        CASE 1 {
+            RETURN strbuf("C")
+        }
+        CASE 2 {
+            RETURN strbuf("G")
+        }
+        ELSE {
+            RETURN strbuf("T")
+        }
+    }
+}
+
+FUNC scan_spectrum() : int<64> {
+    DECL i : int<64> = 0
+    WHILE i < 16 {
+        sv_spec[i] = 0
+        i = i + 1
+    }
+    i = 0
+    WHILE i < g_var_n {
+        DECL r : int<64> = g_var_ref[i]
+        DECL a : int<64> = g_var_alt[i]
+        IF r != a {
+            sv_spec[r * 4 + a] = sv_spec[r * 4 + a] + 1
+        }
+        i = i + 1
+    }
+    DECL total : int<64> = 0
+    i = 0
+    WHILE i < 16 {
+        total = total + sv_spec[i]
+        i = i + 1
+    }
+    DECL k : int<64> = 0
+    DECL ent : float<64> = 0.0
+    DECL r2 : int<64> = 0
+    WHILE r2 < 4 {
+        DECL a2 : int<64> = 0
+        WHILE a2 < 4 {
+            IF r2 != a2 {
+                DECL p : float<64> = oc_div(sv_spec[r2 * 4 + a2], total)
+                sc_add2(sc_base(r2), strbuf(">"), sc_base(a2), CH_VAR, 40 + r2 * 4 + a2, 2, p)
+                IF p > 0.0 {
+                    ent = ent - p * log(p) / log(2.0)
+                }
+                k = k + 1
+            }
+            a2 = a2 + 1
+        }
+        r2 = r2 + 1
+    }
+    sc_add(strbuf("spectrum_entropy"), CH_VAR, 60, 5, ent)
+    RETURN k + 1
+}
+
+FUNC scan_quality() : int<64> {
+    IF g_var_n == 0 {
+        RETURN 0
+    }
+    DECL mq : float<64> = 0.0
+    DECL md : float<64> = 0.0
+    DECL i : int<64> = 0
+    WHILE i < g_var_n {
+        mq = mq + g_var_qual[i]
+        md = md + g_var_depth[i]
+        i = i + 1
+    }
+    mq = oc_div(mq, g_var_n)
+    md = oc_div(md, g_var_n)
+    DECL vq : float<64> = 0.0
+    DECL vd : float<64> = 0.0
+    DECL cv : float<64> = 0.0
+    i = 0
+    WHILE i < g_var_n {
+        DECL a : float<64> = g_var_qual[i] - mq
+        DECL b : float<64> = g_var_depth[i] - md
+        vq = vq + a * a
+        vd = vd + b * b
+        cv = cv + a * b
+        i = i + 1
+    }
+    vq = sqrt(oc_div(vq, g_var_n))
+    vd = sqrt(oc_div(vd, g_var_n))
+    sc_add(strbuf("qual_mean"), CH_VAR, 70, 8, mq)
+    sc_add(strbuf("qual_sd"), CH_VAR, 71, 8, vq)
+    sc_add(strbuf("depth_mean"), CH_VAR, 72, 8, md)
+    sc_add(strbuf("depth_sd"), CH_VAR, 73, 8, vd)
+    sc_add(strbuf("qual_depth_r"), CH_VAR, 74, 3, oc_div(cv, g_var_n) / (vq * vd + OC_EPS))
+    RETURN 5
+}
+
+# ===========================================================================
+# channel 2 — image
+# ===========================================================================
+FUNC scan_bands() : int<64> {
+    DECL n : int<64> = g_img_w * g_img_h
+    IF n == 0 {
+        RETURN 0
+    }
+    DECL b : int<64> = 0
+    WHILE b < 8 {
+        DECL lo : int<64> = b * 32
+        DECL hi : int<64> = lo + 31
+        sc_addi(strbuf("band_"), b, CH_IMG, b, 2, img_frac_in(lo, hi))
+        b = b + 1
+    }
+    RETURN 8
+}
+
+FUNC scan_texture() : int<64> {
+    DECL w : int<64> = g_img_w
+    DECL h : int<64> = g_img_h
+    IF w == 0 {
+        RETURN 0
+    }
+    DECL contrast : float<64> = 0.0
+    DECL homog : float<64> = 0.0
+    DECL grad : float<64> = 0.0
+    DECL cnt : int<64> = 0
+    DECL y : int<64> = 0
+    WHILE y < h {
+        DECL x : int<64> = 0
+        WHILE x < w - 1 {
+            DECL d : float<64> = g_img[y * w + x] - g_img[y * w + x + 1]
+            contrast = contrast + d * d
+            homog = homog + 1.0 / (1.0 + d * d)
+            grad = grad + oc_fabs(d)
+            cnt = cnt + 1
+            x = x + 1
+        }
+        y = y + 1
+    }
+    sc_add(strbuf("glcm_contrast"), CH_IMG, 20, 8, oc_div(contrast, cnt) / 1000.0)
+    sc_add(strbuf("glcm_homogeneity"), CH_IMG, 21, 2, oc_div(homog, cnt))
+    sc_add(strbuf("gradient_energy"), CH_IMG, 22, 8, oc_div(grad, cnt))
+    # intensity histogram energy (uniformity)
+    DECL en : float<64> = 0.0
+    DECL b : int<64> = 0
+    WHILE b < 8 {
+        DECL p : float<64> = img_frac_in(b * 32, b * 32 + 31)
+        en = en + p * p
+        b = b + 1
+    }
+    sc_add(strbuf("histogram_energy"), CH_IMG, 23, 2, en)
+    RETURN 4
+}
+
+# box-counting dimension of the tumour mask: log N(s) against log(1/s)
+FUNC sc_boxcount(s : int<64>, lo : int<64>, hi : int<64>) : int<64> {
+    DECL w : int<64> = g_img_w
+    DECL h : int<64> = g_img_h
+    DECL n : int<64> = 0
+    DECL by : int<64> = 0
+    WHILE by < h {
+        DECL bx : int<64> = 0
+        WHILE bx < w {
+            DECL hit : int<64> = 0
+            DECL y : int<64> = by
+            WHILE y < by + s {
+                DECL x : int<64> = bx
+                WHILE x < bx + s {
+                    IF y < h {
+                        IF x < w {
+                            DECL v : int<64> = g_img[y * w + x]
+                            IF v >= lo {
+                                IF v <= hi {
+                                    hit = 1
+                                }
+                            }
+                        }
+                    }
+                    x = x + 1
+                }
+                y = y + 1
+            }
+            n = n + hit
+            bx = bx + s
+        }
+        by = by + s
+    }
+    RETURN n
+}
+
+FUNC scan_fractal() : int<64> {
+    IF g_img_w == 0 {
+        RETURN 0
+    }
+    DECL n2 : int<64> = sc_boxcount(2, OC_NUCLEUS_MIN, 255)
+    DECL n8 : int<64> = sc_boxcount(8, OC_NUCLEUS_MIN, 255)
+    IF n8 < 1 {
+        n8 = 1
+    }
+    IF n2 < 1 {
+        n2 = 1
+    }
+    DECL dim : float<64> = (log(n2) - log(n8)) / (log(8.0) - log(2.0))
+    sc_add(strbuf("nuclear_fractal_dim"), CH_IMG, 24, 8, dim)
+    RETURN 1
+}
+
+# ===========================================================================
+# channel 3 — organ graph
+# ===========================================================================
+FUNC scan_graph() : int<64> {
+    IF g_node_n == 0 {
+        RETURN 0
+    }
+    DECL i : int<64> = 0
+    WHILE i < g_node_n {
+        DECL s : float<64> = 0.0
+        DECL e : int<64> = 0
+        WHILE e < g_edge_n {
+            IF g_edge_a[e] == i {
+                s = s + g_edge_w[e]
+            }
+            IF g_edge_b[e] == i {
+                s = s + g_edge_w[e]
+            }
+            e = e + 1
+        }
+        sc_add(oc_node_name(i), CH_GRAPH, i, 8, s)
+        i = i + 1
+    }
+    DECL mw : float<64> = 0.0
+    DECL e2 : int<64> = 0
+    WHILE e2 < g_edge_n {
+        mw = mw + g_edge_w[e2]
+        e2 = e2 + 1
+    }
+    mw = oc_div(mw, g_edge_n)
+    DECL vv : float<64> = 0.0
+    e2 = 0
+    WHILE e2 < g_edge_n {
+        DECL d : float<64> = g_edge_w[e2] - mw
+        vv = vv + d * d
+        e2 = e2 + 1
+    }
+    sc_add(strbuf("edge_weight_mean"), CH_GRAPH, 50, 8, mw)
+    sc_add(strbuf("edge_weight_cv"), CH_GRAPH, 51, 9, sqrt(oc_div(vv, g_edge_n)) / (mw + OC_EPS))
+    RETURN g_node_n + 2
+}
+
+# ===========================================================================
+# channel 4 — the real patent landscape
+# ===========================================================================
+FUNC scan_patents() : int<64> {
+    IF g_pt_loaded == 0 {
+        RETURN 0
+    }
+    DECL i : int<64> = 0
+    WHILE i < g_pt_gene_n {
+        IF i < g_expr_g {
+            sc_add2(strbuf("IP:"), strbuf(""), oc_gene_name(i), CH_PAT, i, 6, g_pt_gene[i])
+        }
+        i = i + 1
+    }
+    DECL c : int<64> = 0
+    WHILE c < g_pt_cls_n {
+        sc_add2(strbuf("IPC:"), strbuf(""), pt_class_name(c), CH_PAT, 100 + c, 6, g_pt_cls_count[c])
+        c = c + 1
+    }
+    sc_add(strbuf("patent_velocity_slope"), CH_PAT, 200, 7, pt_velocity_slope())
+    sc_add(strbuf("patent_velocity_cagr"), CH_PAT, 201, 2, pt_velocity_cagr())
+    sc_add(strbuf("applicant_concentration"), CH_PAT, 202, 8, pt_applicant_hhi())
+    RETURN g_pt_gene_n + g_pt_cls_n + 3
+}
+
+# ===========================================================================
+# channel 6 — the published literature (Europe PMC)
+# ===========================================================================
+FUNC scan_literature() : int<64> {
+    IF g_pp_loaded == 0 {
+        RETURN 0
+    }
+    DECL i : int<64> = 0
+    WHILE i < g_pp_gene_n {
+        IF i < g_expr_g {
+            sc_add2(strbuf("LIT:"), strbuf(""), oc_gene_name(i), CH_LIT, i, 9, g_pp_gene[i])
+        }
+        i = i + 1
+    }
+    sc_add(strbuf("evidence_coverage"), CH_LIT, 200, 2, pp_coverage())
+    sc_add(strbuf("evidence_citations"), CH_LIT, 201, 10, pp_total_citations())
+    sc_add(strbuf("evidence_median_cites"), CH_LIT, 202, 10, pp_median_citations())
+    sc_add(strbuf("literature_velocity"), CH_LIT, 203, 9, pp_velocity_slope())
+    sc_add(strbuf("literature_cagr"), CH_LIT, 204, 2, pp_velocity_cagr())
+    sc_add(strbuf("oldest_reference"), CH_LIT, 205, 8, pp_oldest_year())
+    RETURN g_pp_gene_n + 6
+}
+
+# ===========================================================================
+# channel 5 — simulation parameter sensitivity (finite difference)
+# ===========================================================================
+FUNC sc_sens_growth() : float<64> {
+    DECL base : float<64> = growth_run(0, 120, 1.0)
+    DECL r0 : float<64> = p_growth_r[g_ct]
+    p_growth_r[g_ct] = r0 * 1.10
+    DECL up : float<64> = growth_run(0, 120, 1.0)
+    p_growth_r[g_ct] = r0
+    RETURN oc_div(oc_fabs(up - base), base + OC_EPS) / 0.10
+}
+
+FUNC sc_sens_diffusion() : float<64> {
+    angio_run(40, 0.20)
+    DECL base : float<64> = angio_core_nutrient()
+    DECL d0 : float<64> = p_diff_D[g_ct]
+    p_diff_D[g_ct] = d0 * 1.10
+    angio_run(40, 0.20)
+    DECL up : float<64> = angio_core_nutrient()
+    p_diff_D[g_ct] = d0
+    RETURN oc_div(oc_fabs(up - base), base + OC_EPS) / 0.10
+}
+
+FUNC sc_sens_dose() : float<64> {
+    DECL base : float<64> = drug_run(240, 0.25, 8.0)
+    DECL up : float<64> = drug_run(240, 0.25, 10.0)
+    RETURN oc_div(oc_fabs(up - base), base + OC_EPS) / 0.25
+}
+
+FUNC scan_sensitivity() : int<64> {
+    sc_add(strbuf("sens_growth_rate"), CH_SIM, 0, 8, sc_sens_growth())
+    sc_add(strbuf("sens_diffusivity"), CH_SIM, 1, 8, sc_sens_diffusion())
+    sc_add(strbuf("sens_drug_dose"), CH_SIM, 2, 8, sc_sens_dose())
+    # the sweeps above ran short, perturbed simulations; put the canonical
+    # field back so the hypoxic fraction and the spatial views stay consistent
+    angio_run(120, 0.20)
+    sc_add(strbuf("hypoxic_fraction"), CH_SIM, 3, 2, g_hypoxic_frac)
+    sc_add(strbuf("doubling_time"), CH_SIM, 4, 8, growth_doubling_time())
+    sc_add(strbuf("immune_ratio"), CH_SIM, 5, 9, immune_score())
+    RETURN 6
+}
+
+# ===========================================================================
+# standardisation and ranking
+# ===========================================================================
+
+# z-score within each channel, so a patent count and an effect size become
+# comparable without one drowning the other
+FUNC scan_zscore() : int<64> {
+    DECL c : int<64> = 0
+    WHILE c < CH_N {
+        DECL m : float<64> = 0.0
+        DECL k : int<64> = 0
+        DECL i : int<64> = 0
+        WHILE i < sc_n {
+            IF sc_chan[i] == c {
+                m = m + sc_val[i]
+                k = k + 1
+            }
+            i = i + 1
+        }
+        IF k > 1 {
+            m = oc_div(m, k)
+            DECL v : float<64> = 0.0
+            i = 0
+            WHILE i < sc_n {
+                IF sc_chan[i] == c {
+                    DECL d : float<64> = sc_val[i] - m
+                    v = v + d * d
+                }
+                i = i + 1
+            }
+            DECL sd : float<64> = sqrt(oc_div(v, k)) + OC_EPS
+            i = 0
+            WHILE i < sc_n {
+                IF sc_chan[i] == c {
+                    sc_z[i] = (sc_val[i] - m) / sd
+                }
+                i = i + 1
+            }
+        }
+        c = c + 1
+    }
+    RETURN sc_n
+}
+
+# selection sort of the id list by descending |z| (n is small, order is stable
+# and therefore reproducible)
+FUNC scan_rank() : int<64> {
+    DECL i : int<64> = 0
+    WHILE i < sc_n {
+        sc_rank[i] = i
+        i = i + 1
+    }
+    i = 0
+    WHILE i < sc_n {
+        DECL best : int<64> = i
+        DECL j : int<64> = i + 1
+        WHILE j < sc_n {
+            IF oc_fabs(sc_z[sc_rank[j]]) > oc_fabs(sc_z[sc_rank[best]]) {
+                best = j
+            }
+            j = j + 1
+        }
+        DECL t : int<64> = sc_rank[i]
+        sc_rank[i] = sc_rank[best]
+        sc_rank[best] = t
+        i = i + 1
+    }
+    RETURN sc_n
+}
+
+FUNC scan_count_in(c : int<64>) : int<64> {
+    DECL k : int<64> = 0
+    DECL i : int<64> = 0
+    WHILE i < sc_n {
+        IF sc_chan[i] == c {
+            k = k + 1
+        }
+        i = i + 1
+    }
+    RETURN k
+}
+
+# how many signals cleared |z| >= 2 (the "stands out" threshold)
+FUNC scan_significant() : int<64> {
+    DECL k : int<64> = 0
+    DECL i : int<64> = 0
+    WHILE i < sc_n {
+        IF oc_fabs(sc_z[i]) >= 2.0 {
+            k = k + 1
+        }
+        i = i + 1
+    }
+    RETURN k
+}
+
+# ---------------------------------------------------------------------------
+# Sweep everything.  Returns the number of signals measured.
+# ---------------------------------------------------------------------------
+FUNC scan_all() : int<64> {
+    scan_reset()
+    scan_expression()
+    scan_samples()
+    scan_coexpression()
+    scan_chromosomes()
+    scan_spectrum()
+    scan_quality()
+    scan_bands()
+    scan_texture()
+    scan_fractal()
+    scan_graph()
+    scan_patents()
+    scan_literature()
+    scan_sensitivity()
+    scan_zscore()
+    scan_rank()
+    RETURN sc_n
+}

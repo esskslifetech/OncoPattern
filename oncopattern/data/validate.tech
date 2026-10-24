@@ -1,0 +1,136 @@
+# ============================================================================
+# oncopattern/data/validate.tech — post-ingest validation and quarantine
+# reporting.
+#
+# The ingest parsers quarantine syntactically bad rows.  This module applies
+# the *semantic* schema rules across the whole loaded dataset and renders the
+# quarantine table for the report layer.
+#
+# META @module(name:validate, provides:validate_all, requires:schema)
+# ============================================================================
+
+IMPORT oncopattern/data/schema
+
+DECL g_val_errors  : int<64> = 0
+DECL g_val_warns   : int<64> = 0
+
+# Variants must be sorted-ish, in range, and non-duplicated.  Returns the
+# number of NEW problems found (duplicates are warnings, not quarantine).
+FUNC validate_variants() : int<64> {
+    DECL problems : int<64> = 0
+    DECL i : int<64> = 0
+    WHILE i < g_var_n {
+        IF g_var_qual[i] < 0.0 {
+            oc_quarantine(i, 5, OC_Q_QUAL)
+            problems = problems + 1
+        }
+        IF g_var_pos[i] < 1 {
+            oc_quarantine(i, 1, OC_Q_POS)
+            problems = problems + 1
+        }
+        IF g_var_ref[i] == g_var_alt[i] {
+            # REF == ALT is not a variant at all
+            oc_quarantine(i, 4, OC_Q_BASE)
+            problems = problems + 1
+        }
+        i = i + 1
+    }
+    # duplicate positions on the same chromosome -> warning
+    DECL dups : int<64> = 0
+    i = 1
+    WHILE i < g_var_n {
+        IF g_var_chrom[i] == g_var_chrom[i - 1] {
+            IF g_var_pos[i] == g_var_pos[i - 1] {
+                dups = dups + 1
+            }
+        }
+        i = i + 1
+    }
+    g_val_warns = g_val_warns + dups
+    g_val_errors = g_val_errors + problems
+    RETURN problems
+}
+
+# Expression values are log2(FPKM+1): they may never be negative.
+FUNC validate_expression() : int<64> {
+    DECL problems : int<64> = 0
+    DECL i : int<64> = 0
+    WHILE i < g_expr_g * g_expr_s {
+        IF g_expr[i] < 0.0 {
+            problems = problems + 1
+            g_expr[i] = 0.0
+        }
+        i = i + 1
+    }
+    g_val_errors = g_val_errors + problems
+    RETURN problems
+}
+
+# Graph edges must reference existing nodes and carry a positive weight.
+FUNC validate_graph() : int<64> {
+    DECL problems : int<64> = 0
+    DECL i : int<64> = 0
+    WHILE i < g_edge_n {
+        IF g_edge_a[i] < 0 {
+            problems = problems + 1
+        }
+        IF g_edge_a[i] >= g_node_n {
+            problems = problems + 1
+        }
+        IF g_edge_b[i] >= g_node_n {
+            problems = problems + 1
+        }
+        IF g_edge_w[i] <= 0.0 {
+            problems = problems + 1
+        }
+        i = i + 1
+    }
+    g_val_errors = g_val_errors + problems
+    RETURN problems
+}
+
+FUNC validate_image() : int<64> {
+    DECL problems : int<64> = 0
+    IF g_img_w * g_img_h > OC_MAX_PX {
+        problems = problems + 1
+    }
+    g_val_errors = g_val_errors + problems
+    RETURN problems
+}
+
+FUNC validate_all() : int<64> {
+    g_val_errors = 0
+    g_val_warns = 0
+    validate_variants()
+    validate_expression()
+    validate_graph()
+    validate_image()
+    RETURN g_val_errors
+}
+
+# render the quarantine table as text into `dst`
+FUNC validate_render(dst : buf<>, at : int<64>) : int<64> {
+    at = oc_cat(dst, at, strbuf("QUARANTINE TABLE ("))
+    at = oc_cati(dst, at, g_quar_n)
+    at = oc_cat(dst, at, strbuf(" rows)\n"))
+    at = oc_rep(dst, at, 45, 52)
+    at = oc_nl(dst, at)
+    IF g_quar_n == 0 {
+        at = oc_cat(dst, at, strbuf("  (none — every row satisfied the schema)\n"))
+        RETURN at
+    }
+    DECL i : int<64> = 0
+    WHILE i < g_quar_n {
+        DECL s : int<64> = at
+        at = oc_cat(dst, at, strbuf("  line "))
+        at = oc_cati(dst, at, g_quar_line[i])
+        at = oc_pad(dst, at, s, 16)
+        at = oc_cat(dst, at, strbuf("field "))
+        at = oc_cati(dst, at, g_quar_field[i])
+        at = oc_pad(dst, at, s, 28)
+        at = oc_cat(dst, at, oc_quar_reason_txt(g_quar_reason[i]))
+        at = oc_nl(dst, at)
+        i = i + 1
+    }
+    RETURN at
+}

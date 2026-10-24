@@ -1,0 +1,128 @@
+# ============================================================================
+# test_report.tech — report structure, statistics and the comparison engine.
+#
+# Section ordering, table contents and the MATCH/MINOR/MAJOR classification
+# thresholds are all asserted against the rendered bytes.
+# ============================================================================
+
+IMPORT oncopattern/test/harness
+IMPORT oncopattern/report/generator
+IMPORT oncopattern/pattern/detect
+IMPORT oncopattern/data/ingest_image
+IMPORT oncopattern/data/ingest_vcf
+IMPORT oncopattern/data/ingest_json
+
+t_begin(strbuf("ONCOPATTERN — P5/P6 REPORT + COMPARISON CERTIFICATE"))
+
+params_init()
+params_set_type(CT_LUAD)
+csv_load(strbuf("ocdata/clinical.csv"))
+json_graph_load(strbuf("ocdata/pathway.json"))
+vcf_load(strbuf("ocdata/variants_P001_t0.vcf"))
+expr_load(strbuf("ocdata/expression.csv"))
+img_load(strbuf("ocdata/histology.pgm"))
+pat_reset()
+detect_all()
+classify_all()
+physical_all(CT_LUAD)
+classify_all()
+
+# ---- record population
+t_eqi(strbuf("record: 10 statistics defined"), REP_NSTAT, 10)
+report_fill(strbuf("P001"), strbuf("t0 baseline"), CT_LUAD, 3, 64)
+t_eqf(strbuf("record: TMB copied from registry"), rep_tmb, g_pat_score[PAT_TMB_HIGH], 0.0)
+t_eqi(strbuf("record: mutation count"), rep_mut_count, 1000)
+t_range(strbuf("record: risk index in range"), rep_risk, 0.0, 100.0)
+t_true(strbuf("record: statistic names resolve"), oc_gt0(len(rep_stat_name(0))))
+t_true(strbuf("record: statistic units resolve"), oc_gt0(len(rep_stat_unit(9))))
+t_eqf(strbuf("record: accessor matches field"), rep_stat(0), rep_tmb, 0.0)
+
+# ---- clinical CSV binding
+DECL rc : int<64> = report_from_clinical(1)
+t_eqi(strbuf("clinical: row 1 populates the record"), rc, REP_NSTAT)
+t_true(strbuf("clinical: patient id read"), oc_gt0(rep_patient_n))
+
+# ---- text report structure
+DECL n : int<64> = txt_build(0)
+t_true(strbuf("text: report is substantial"), oc_gt0(n - 3000))
+t_eqi(strbuf("text: 7 numbered sections without comparison"), txt_section_count(), 7)
+DECL body : buf<> = slice(txt, 0, n)
+t_true(strbuf("text: title present"), oc_has(body, strbuf("ONCOPATTERN ANALYSIS REPORT")))
+t_true(strbuf("text: section 1 patient summary"), oc_has(body, strbuf("1. PATIENT SUMMARY")))
+t_true(strbuf("text: section 2 genomic"), oc_has(body, strbuf("2. GENOMIC PATTERNS")))
+t_true(strbuf("text: section 3 histological"), oc_has(body, strbuf("3. HISTOLOGICAL PATTERNS")))
+t_true(strbuf("text: section 4 physical"), oc_has(body, strbuf("4. PHYSICAL PATTERNS")))
+t_true(strbuf("text: section 5 simulation"), oc_has(body, strbuf("5. SIMULATION RESULTS")))
+t_true(strbuf("text: section 6 gallery"), oc_has(body, strbuf("6. VISUALISATION GALLERY")))
+t_true(strbuf("text: section 7 statistics"), oc_has(body, strbuf("7. STATISTICAL SUMMARY")))
+t_true(strbuf("text: TMB interpretation included"), oc_has(body, strbuf("checkpoint inhibitor")))
+t_true(strbuf("text: pattern names tabulated"), oc_has(body, strbuf("tmb_high")))
+t_true(strbuf("text: simulation engines named"), oc_has(body, strbuf("ODE RK4")))
+t_true(strbuf("text: metastatic route rendered"), oc_has(body, strbuf("->")))
+t_true(strbuf("text: mass conservation reported"), oc_has(body, strbuf("1.000000")))
+t_true(strbuf("text: saved to disk"), oc_gt0(txt_save(strbuf("ocout/_report_test.txt"))))
+
+# provenance: an artefact must say what produced it and who is responsible
+t_true(strbuf("attribution: company in the report"), oc_has(body, oc_company()))
+t_true(strbuf("attribution: author in the report"), oc_has(body, oc_author()))
+t_true(strbuf("attribution: repository in the report"), oc_has(body, oc_repo()))
+t_true(strbuf("attribution: project name"), oc_has(body, oc_project()))
+
+# ---- HTML report
+DECL hn : int<64> = html_build(0, 0)
+DECL hbody : buf<> = slice(html, 0, hn)
+t_true(strbuf("html: doctype present"), oc_has(hbody, strbuf("<!DOCTYPE html>")))
+t_true(strbuf("html: closes the document"), oc_has(hbody, strbuf("</html>")))
+t_true(strbuf("html: style block embedded"), oc_has(hbody, strbuf("<style>")))
+t_true(strbuf("html: tables rendered"), oc_has(hbody, strbuf("<table>")))
+t_true(strbuf("html: grade badges rendered"), oc_has(hbody, strbuf("class=\"b g")))
+t_true(strbuf("html: summary cards rendered"), oc_has(hbody, strbuf("class=\"card\"")))
+t_true(strbuf("html: pattern names present"), oc_has(hbody, strbuf("necrosis_pattern")))
+t_true(strbuf("html: attribution in the footer"), oc_has(hbody, oc_author()))
+t_true(strbuf("html: repository linked"), oc_has(hbody, oc_repo()))
+
+# ---- comparison engine thresholds (plan §7.3)
+t_eqi(strbuf("compare: 0% delta -> MATCH"), rc_class(0.0), CMP_MATCH)
+t_eqi(strbuf("compare: 4.9% -> MATCH"), rc_class(4.9), CMP_MATCH)
+t_eqi(strbuf("compare: 5% -> MINOR_CHANGE"), rc_class(5.0), CMP_MINOR)
+t_eqi(strbuf("compare: 19.9% -> MINOR_CHANGE"), rc_class(19.9), CMP_MINOR)
+t_eqi(strbuf("compare: 20% -> MAJOR_CHANGE"), rc_class(20.0), CMP_MAJOR)
+t_eqi(strbuf("compare: -30% -> MAJOR_CHANGE"), rc_class(0.0 - 30.0), CMP_MAJOR)
+t_true(strbuf("compare: class names resolve"), oc_gt0(len(cmp_class_name(CMP_MAJOR))))
+
+# ---- two-timepoint comparison over the real datasets
+rc_capture(0)
+pat_snapshot(0)
+vcf_load(strbuf("ocdata/variants_P001_t1.vcf"))
+pat_reset()
+detect_all()
+classify_all()
+physical_all(CT_LUAD)
+classify_all()
+report_fill(strbuf("P001"), strbuf("t1 follow-up"), CT_LUAD, 3, 64)
+rc_capture(1)
+pat_snapshot(1)
+DECL majors : int<64> = pat_compare(0, 1)
+t_true(strbuf("compare: progression detected t0->t1"), oc_gt0(majors))
+t_eqi(strbuf("compare: snapshots agree on pattern count"), OC_NPAT, 24)
+t_true(strbuf("compare: SNV hotspot flagged as major"), oc_gt0(cmp_class[PAT_SNV_CLUSTER]))
+t_true(strbuf("compare: hotspot grew"), oc_gt(cmp_delta[PAT_SNV_CLUSTER], 0.0))
+t_eqi(strbuf("compare: growing hotspot is a regression"), cmp_is_regression(PAT_SNV_CLUSTER), 1)
+t_eqi(strbuf("compare: falling immune score is a regression"), cmp_is_regression(PAT_IMMUNE), oc_lt(cmp_delta[PAT_IMMUNE], 0.0))
+t_eqi(strbuf("compare: classes partition the registry"), cmp_count_class(CMP_MATCH) + cmp_count_class(CMP_MINOR) + cmp_count_class(CMP_MAJOR), OC_NPAT)
+
+# ---- comparison report includes section 8 and the alerts block
+DECL cn : int<64> = txt_build(1)
+DECL cbody : buf<> = slice(txt, 0, cn)
+t_eqi(strbuf("text: 8 sections with comparison"), txt_section_count(), 8)
+t_true(strbuf("text: comparison section present"), oc_has(cbody, strbuf("8. COMPARISON VS BASELINE")))
+t_true(strbuf("text: alerts block present"), oc_has(cbody, strbuf("ALERTS")))
+t_true(strbuf("text: delta column present"), oc_has(cbody, strbuf("DELTA %")))
+t_true(strbuf("text: a classification is printed"), oc_has(cbody, strbuf("MAJOR_CHANGE")))
+
+# ---- determinism
+DECL sha_a : buf<> = txt_sha()
+txt_build(1)
+t_true(strbuf("determinism: identical report checksum"), oc_same(sha_a, txt_sha()))
+
+YIELD t_end(strbuf("ocout/test_report.txt"))

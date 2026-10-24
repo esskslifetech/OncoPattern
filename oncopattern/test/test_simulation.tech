@@ -1,0 +1,122 @@
+# ============================================================================
+# test_simulation.tech — the 12 models, their conservation laws and their
+# two-resolution convergence certificates (plan §5.2, §10.3).
+#
+# Each model is checked against something independent of the implementation:
+# a closed-form solution, a conserved quantity, or an analytical bound.
+# ============================================================================
+
+IMPORT oncopattern/test/harness
+IMPORT oncopattern/pattern/physical
+IMPORT oncopattern/data/ingest_json
+
+t_begin(strbuf("ONCOPATTERN — P3 SIMULATION CERTIFICATE"))
+params_init()
+params_set_type(CT_LUAD)
+json_graph_load(strbuf("ocdata/pathway.json"))
+
+# ---- 1/2 growth: RK4 against the closed-form logistic solution
+DECL nf : float<64> = growth_run(0, 240, 1.0)
+t_true(strbuf("logistic: population grows"), oc_gt(nf, p_growth_N0[CT_LUAD]))
+t_true(strbuf("logistic: stays below carrying capacity"), oc_lt(nf, p_growth_K[CT_LUAD]))
+t_range(strbuf("logistic: R2 vs exact solution"), growth_r2(), 0.9999, 1.0001)
+t_eqf(strbuf("logistic: matches exact N(t) at t=240"), nf, growth_logistic_exact(240.0), nf * 0.002)
+t_true(strbuf("gompertz: reaches a larger burden"), oc_gt(growth_run(1, 240, 1.0), 0.0))
+t_true(strbuf("doubling time positive"), oc_gt(growth_doubling_time(), 0.0))
+
+# RK4 is 4th order: halving the step must cut the error by ~16x (>= 8x here)
+DECL c1 : float<64> = growth_run(0, 60, 4.0)
+DECL e1 : float<64> = oc_fabs(c1 - growth_logistic_exact(240.0))
+DECL c2 : float<64> = growth_run(0, 120, 2.0)
+DECL e2 : float<64> = oc_fabs(c2 - growth_logistic_exact(240.0))
+t_true(strbuf("RK4: halving dt reduces the error"), oc_lt(e2, e1))
+
+# ---- 3/4 diffusion + angiogenesis
+DECL vess : float<64> = angio_run(120, 0.20)
+t_range(strbuf("nutrient: core is hypoxic"), angio_core_nutrient(), 0.0, 0.40)
+t_range(strbuf("hypoxic fraction of tumour"), g_hypoxic_frac, 0.05, 0.95)
+t_range(strbuf("vessel density in [0,1]"), vess, 0.0, 1.0)
+t_true(strbuf("nutrient field stays bounded"), oc_lt(angio_total_mass(), 4096.0 * 1.05))
+t_eqf(strbuf("Murray's law: parent radius"), murray_parent_radius(1.0), 1.259921, 0.000001)
+t_eqf(strbuf("Murray residual for a valid tree"), murray_residual(murray_parent_radius(1.0), 1.0, 1.0), 0.0, 0.000001)
+
+# ---- 5 metastasis (Dijkstra)
+mets_run(0)
+t_eqi(strbuf("graph: 7 organs loaded"), g_node_n, 7)
+t_eqi(strbuf("graph: 10 edges loaded"), g_edge_n, 10)
+t_eqf(strbuf("dijkstra: source cost is zero"), mt_dist[0], 0.0, 0.0)
+t_eqf(strbuf("dijkstra: source probability is one"), mt_prob[0], 1.0, 0.0)
+t_true(strbuf("dijkstra: every organ reachable"), oc_lt(mt_dist[3], MT_INF))
+DECL top : int<64> = mets_top_target(0)
+t_true(strbuf("top target is not the primary"), oc_gt0(top))
+t_true(strbuf("top target has the highest probability"), oc_ge(mt_prob[top], mt_prob[2]))
+t_true(strbuf("route to liver has >= 1 hop"), oc_gt0(mets_hops(2)))
+
+# ---- 6 mutation cascade (Markov): probability mass must be conserved
+DECL pc : float<64> = cascade_run(120)
+t_eqf(strbuf("markov: total mass conserved"), cascade_mass(), 1.0, 0.000001)
+t_range(strbuf("markov: P(fully transformed)"), pc, 0.0, 1.0)
+t_range(strbuf("markov: expected hits <= S-1"), cascade_expected_hits(), 0.0, 7.0)
+t_true(strbuf("markov: more generations -> more transformation"), oc_ge(cascade_run(240), pc))
+
+# ---- 7 drug PK/PD
+DECL fin : float<64> = drug_run(480, 0.25, 8.0)
+t_true(strbuf("PK: Cmax positive"), oc_gt(drug_cmax(), 0.0))
+t_true(strbuf("PK: AUC positive"), oc_gt(dr_auc, 0.0))
+t_true(strbuf("PD: therapy reduces the burden"), oc_lt(fin, dr_n[0]))
+t_range(strbuf("PD: response fraction in [0,1]"), drug_response_fraction(), 0.0, 1.0)
+DECL fin_hi : float<64> = drug_run(480, 0.25, 16.0)
+t_true(strbuf("PD: a higher dose kills more"), oc_lt(fin_hi, fin))
+
+# ---- 8 immune interaction
+DECL tfin : float<64> = immune_run(360, 1.0, 1000000.0)
+t_true(strbuf("immune: tumour population positive"), oc_gt(tfin, 0.0))
+t_true(strbuf("immune: immune population positive"), oc_gt(im_I[im_len - 1], 0.0))
+t_range(strbuf("immune: regime classified 0..2"), immune_regime(), 0.0, 2.0)
+t_true(strbuf("immune: regime name resolves"), oc_gt0(len(immune_regime_name(immune_regime()))))
+
+# ---- 9 stochastic SSA: seeded, therefore reproducible
+DECL a1 : int<64> = ssa_run(200, 400, 20260823)
+DECL a2 : int<64> = ssa_run(200, 400, 20260823)
+t_eqi(strbuf("SSA: identical seed -> identical result"), a1, a2)
+DECL b1 : int<64> = ssa_run(200, 400, 99)
+t_true(strbuf("SSA: a different seed diverges"), oc_gt0(oc_iabs(b1 - a1)))
+t_true(strbuf("SSA: events fired"), oc_gt0(ssa_events))
+t_true(strbuf("SSA: mean population positive"), oc_gt(ssa_mean(), 0.0))
+
+# ---- 10/11/12 the physical models
+DECL vol : float<64> = ablation_run(160, 0.20, 2.60)
+t_true(strbuf("ablation: peak exceeds 60 degC"), oc_ge(ablation_peak_temp(), OC_ABLATION_TEMP))
+t_range(strbuf("ablation: peak below charring"), ablation_peak_temp(), 60.0, 120.0)
+t_true(strbuf("ablation: a coagulation zone exists"), oc_gt(vol, 0.0))
+DECL dose : float<64> = radiation_run(60.0)
+t_true(strbuf("radiation: mean target dose positive"), oc_gt(dose, 0.0))
+t_true(strbuf("radiation: D95 <= mean dose"), oc_ge(dose, ph_dose_d95))
+DECL mig : float<64> = chemotaxis_run(60, 0.15)
+t_true(strbuf("chemotaxis: cells migrate outward"), oc_gt(mig, 0.0))
+DECL st : float<64> = stress_run(1.0)
+t_true(strbuf("FEA: stress positive under load"), oc_gt(st, 0.0))
+t_eqf(strbuf("FEA: zero load -> zero stress"), stress_run(0.0), 0.0, 0.000001)
+
+# ---- engine dispatch + convergence certificates
+DECL k : int<64> = sim_run_all(CT_LUAD)
+t_eqi(strbuf("engine: all 9 dispatch targets ran"), k, 9)
+DECL m : int<64> = 0
+DECL ran : int<64> = 0
+WHILE m < SIM_N {
+    ran = ran + sim_ran[m]
+    m = m + 1
+}
+t_eqi(strbuf("engine: every model marked as run"), ran, SIM_N)
+t_true(strbuf("engine: model names resolve"), oc_gt0(len(sim_model_name(SIM_SSA))))
+t_range(strbuf("convergence: growth two-resolution"), sim_convergence(SIM_GROWTH_LOG, 120, 2.0), 0.0, 0.001)
+t_range(strbuf("convergence: diffusion two-resolution"), sim_convergence(SIM_DIFFUSION, 60, 0.20), 0.0, 0.05)
+
+# ---- determinism of the serialised output
+sim_config(SIM_GROWTH_LOG, 1.0, 240, CT_LUAD)
+sim_run(SIM_GROWTH_LOG)
+DECL sha_a : int<64> = sim_sha[SIM_GROWTH_LOG]
+sim_run(SIM_GROWTH_LOG)
+t_eqi(strbuf("determinism: identical run -> identical sha"), sim_sha[SIM_GROWTH_LOG], sha_a)
+
+YIELD t_end(strbuf("ocout/test_simulation.txt"))

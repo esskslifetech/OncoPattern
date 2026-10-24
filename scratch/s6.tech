@@ -1,0 +1,6 @@
+DECL b : buf<> = strbuf("[0, 1, 2]")
+YIELD 1
+print("hello from print")
+print(mkstr(strbuf("buf-print")))
+DECL x : int<64> = 5
+YIELD x

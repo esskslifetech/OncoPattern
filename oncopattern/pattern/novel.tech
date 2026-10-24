@@ -1,0 +1,445 @@
+# ============================================================================
+# oncopattern/pattern/novel.tech — signals invented for this platform.
+#
+# The scanner measures what the data already contains.  These six signals do
+# not exist in the source data at all: each is a composite coined here,
+# defined by combining channels that are normally analysed separately.  Every
+# one is computed from real inputs — the molecular panel, the histology field,
+# the simulation output, and the live EPO patent landscape.
+#
+#   TOI  Translational Opportunity Index   biology strength MINUS patent cover
+#   ICI  IP Crowding Index                 how contested the strong targets are
+#   HIA  Hypoxia-Immune Antagonism         simulated hypoxia vs measured TILs
+#   MGC  Morphology-Genomics Concordance   image proliferation vs transcript
+#   AEA  Attention-Effect Alignment        patent attention vs modelled effect
+#   ODC  Orphan Driver Count               strong biology, no IP at all
+#   NDS  Neglected Driver Score            strong biology, thin papers AND IP
+#   RIL  Research-to-IP Lag                literature growth vs patent growth
+#   ESI  Evidence Support Index            how much of the platform is cited
+#
+# With the literature channel in place the three-way triangle is the point:
+# BIOLOGY (this tumour's data), SCIENCE (Europe PMC papers) and IP (EPO
+# patents) disagree in informative ways.  A gene strong in biology and heavily
+# published but unpatented is a translational gap; strong in biology and
+# absent from both is genuinely unexamined.
+#
+# TOI is the interesting one: a gene with a large tumour-versus-normal effect
+# and thin patent coverage is, on this evidence, an under-exploited target.
+# The index is deliberately simple and its inputs are printed alongside it, so
+# a reader can see exactly what drove the number.
+#
+# META @module(name:pat_novel, provides:novel_all, requires:pat_scan)
+# ============================================================================
+
+IMPORT oncopattern/pattern/scan
+
+DECL NV_MAX  : int<64> = 32
+DECL nv_val  : buf<32, float<64>> = null
+DECL nv_off  : buf<32, int<64>>   = null
+DECL nv_len  : buf<32, int<64>>   = null
+DECL nv_ab   : buf<32, int<64>>   = null      # abbreviation offset
+DECL nv_abl  : buf<32, int<64>>   = null
+DECL nv_names : buf<4096> = null
+DECL nv_nn   : int<64> = 0
+DECL nv_n    : int<64> = 0
+
+# the winning gene of the TOI sweep
+DECL nv_toi_gene  : int<64> = -1
+DECL nv_toi_bio   : float<64> = 0.0
+DECL nv_toi_ip    : float<64> = 0.0
+DECL nv_orphans   : int<64> = 0
+
+FUNC nv_add(abbr : buf<>, name : buf<>, v : float<64>) : int<64> {
+    IF nv_n >= NV_MAX {
+        RETURN -1
+    }
+    DECL i : int<64> = nv_n
+    nv_ab[i] = nv_nn
+    nv_abl[i] = len(abbr)
+    nv_nn = oc_cat(nv_names, nv_nn, abbr)
+    nv_off[i] = nv_nn
+    nv_len[i] = len(name)
+    nv_nn = oc_cat(nv_names, nv_nn, name)
+    nv_val[i] = v
+    nv_n = nv_n + 1
+    RETURN i
+}
+
+FUNC nv_abbr(i : int<64>) : buf<> {
+    RETURN slice(nv_names, nv_ab[i], nv_abl[i])
+}
+
+FUNC nv_name(i : int<64>) : buf<> {
+    RETURN slice(nv_names, nv_off[i], nv_len[i])
+}
+
+# locate a scanned signal by channel and index
+FUNC sc_find(chan : int<64>, aux : int<64>) : int<64> {
+    DECL i : int<64> = 0
+    WHILE i < sc_n {
+        IF sc_chan[i] == chan {
+            IF sc_aux[i] == aux {
+                RETURN i
+            }
+        }
+        i = i + 1
+    }
+    RETURN -1
+}
+
+# ---------------------------------------------------------------------------
+# TOI — Translational Opportunity Index
+#
+#   TOI(g) = |z_expression(g)| - z_patents(g)
+#
+# Both terms are z-scores within their own channel, so a transcriptomic effect
+# and a patent count are on the same footing.  A high TOI means the gene
+# separates tumour from normal strongly while attracting little IP.
+# ---------------------------------------------------------------------------
+FUNC novel_toi() : float<64> {
+    DECL best : float<64> = -1000.0
+    nv_toi_gene = -1
+    nv_orphans = 0
+    DECL g : int<64> = 0
+    WHILE g < g_expr_g {
+        DECL ei : int<64> = sc_find(CH_EXPR, g)
+        DECL pi : int<64> = sc_find(CH_PAT, g)
+        IF ei >= 0 {
+            IF pi >= 0 {
+                DECL bio : float<64> = oc_fabs(sc_z[ei])
+                DECL ip : float<64> = sc_z[pi]
+                DECL toi : float<64> = bio - ip
+                IF bio >= 1.0 {
+                    IF sc_val[pi] < 1.0 {
+                        nv_orphans = nv_orphans + 1
+                    }
+                }
+                IF toi > best {
+                    best = toi
+                    nv_toi_gene = g
+                    nv_toi_bio = bio
+                    nv_toi_ip = ip
+                }
+            }
+        }
+        g = g + 1
+    }
+    IF nv_toi_gene < 0 {
+        RETURN 0.0
+    }
+    RETURN best
+}
+
+# ---------------------------------------------------------------------------
+# ICI — IP Crowding Index
+#
+# Mean normalised patent coverage across the genes whose biology is strongest
+# (|z| >= 1).  Near 1 means the strong targets are already crowded with IP;
+# near 0 means the field has not caught up with the biology.
+# ---------------------------------------------------------------------------
+FUNC novel_ici() : float<64> {
+    DECL s : float<64> = 0.0
+    DECL k : int<64> = 0
+    DECL g : int<64> = 0
+    WHILE g < g_expr_g {
+        DECL ei : int<64> = sc_find(CH_EXPR, g)
+        IF ei >= 0 {
+            IF oc_fabs(sc_z[ei]) >= 1.0 {
+                s = s + pt_gene_norm(g)
+                k = k + 1
+            }
+        }
+        g = g + 1
+    }
+    RETURN oc_div(s, k)
+}
+
+# ---------------------------------------------------------------------------
+# HIA — Hypoxia-Immune Antagonism
+#
+#   HIA = hypoxic_fraction * (1 - normalised |TIL gradient|)
+#
+# Couples a simulated quantity (the hypoxic core produced by the reaction-
+# diffusion model) with a measured one (the lymphocyte gradient at the tumour
+# margin).  High HIA is the immunologically cold, hypoxic phenotype: the
+# combination neither channel reports on its own.
+# ---------------------------------------------------------------------------
+FUNC novel_hia() : float<64> {
+    DECL til : float<64> = oc_fabs(g_pat_score[PAT_TIL_GRADIENT]) / 0.20
+    IF til > 1.0 {
+        til = 1.0
+    }
+    RETURN g_hypoxic_frac * (1.0 - til)
+}
+
+# ---------------------------------------------------------------------------
+# MGC — Morphology-Genomics Concordance
+#
+# Compares proliferation as counted in the image (mitotic density, normalised
+# against 10 figures per high-power field) with proliferation as transcribed
+# (mean effect size of MKI67 and AURKA).  1 means the two modalities agree;
+# 0 means the slide and the transcriptome tell different stories.
+# ---------------------------------------------------------------------------
+FUNC novel_mgc() : float<64> {
+    DECL img : float<64> = g_pat_score[PAT_MITOTIC] / 10.0
+    IF img > 1.0 {
+        img = 1.0
+    }
+    DECL e1 : int<64> = sc_find(CH_EXPR, 5)          # MKI67
+    DECL e2 : int<64> = sc_find(CH_EXPR, 7)          # AURKA
+    DECL tx : float<64> = 0.0
+    IF e1 >= 0 {
+        tx = tx + oc_fabs(sc_z[e1])
+    }
+    IF e2 >= 0 {
+        tx = tx + oc_fabs(sc_z[e2])
+    }
+    tx = tx / 4.0
+    IF tx > 1.0 {
+        tx = 1.0
+    }
+    RETURN 1.0 - oc_fabs(img - tx)
+}
+
+# ---------------------------------------------------------------------------
+# AEA — Attention-Effect Alignment
+#
+# The patent landscape was fetched by IPC class, and each class was chosen to
+# correspond to one of the platform's own simulation models.  AEA asks whether
+# the world patents most where this tumour's model response is largest: the
+# correlation between patent volume per class and the modelled effect of the
+# mechanism that class covers.
+#
+# effect vector, in the order of the fetched classes:
+#   0 antineoplastic overall  -> tumour burden reduction under therapy
+#   1 leukaemia               -> stochastic clone dynamics
+#   2 radiotherapy            -> mean target dose
+#   3 RF ablation             -> ablation zone volume
+#   4 antibody immunotherapy  -> immune / tumour ratio
+#   5 nanoparticle delivery   -> drug AUC
+#   6 nucleic acid assay      -> TMB
+#   7 tumour marker assay     -> expression cluster separation
+#   8 photodynamic ablation   -> peak temperature above body heat
+#   9 image analysis          -> nuclei detected
+#  10 decision support        -> risk index
+#  11 MRI diagnostics         -> tumour volume
+# ---------------------------------------------------------------------------
+FUNC nv_effect(i : int<64>) : float<64> {
+    IF i == 0 {
+        RETURN drug_response_fraction()
+    }
+    IF i == 1 {
+        RETURN oc_div(ssa_mean(), 500.0)
+    }
+    IF i == 2 {
+        RETURN g_pat_score[PAT_RADIATION] / 60.0
+    }
+    IF i == 3 {
+        RETURN g_pat_score[PAT_ABLATION] / 0.5
+    }
+    IF i == 4 {
+        RETURN oc_fmin(g_pat_score[PAT_IMMUNE], 1.0)
+    }
+    IF i == 5 {
+        RETURN oc_fmin(dr_auc / 500.0, 1.0)
+    }
+    IF i == 6 {
+        RETURN oc_fmin(g_pat_score[PAT_TMB_HIGH] / 40.0, 1.0)
+    }
+    IF i == 7 {
+        RETURN oc_fmin(g_pat_score[PAT_EXPR_CLUSTER] / 3.0, 1.0)
+    }
+    IF i == 8 {
+        RETURN oc_fmin((ablation_peak_temp() - OC_BODY_TEMP) / 50.0, 1.0)
+    }
+    IF i == 9 {
+        RETURN oc_fmin(g_pat_loc[PAT_PLEOMORPHISM] / 30.0, 1.0)
+    }
+    IF i == 10 {
+        RETURN oc_fmin(classify_risk_index() / 100.0, 1.0)
+    }
+    RETURN oc_fmin(g_pat_score[PAT_GROWTH] / 5000000000.0, 1.0)
+}
+
+FUNC novel_aea() : float<64> {
+    DECL n : int<64> = g_pt_cls_n
+    IF n < 3 {
+        RETURN 0.0
+    }
+    DECL mx : float<64> = 0.0
+    DECL my : float<64> = 0.0
+    DECL i : int<64> = 0
+    WHILE i < n {
+        mx = mx + log(g_pt_cls_count[i] + 1.0)
+        my = my + nv_effect(i)
+        i = i + 1
+    }
+    mx = oc_div(mx, n)
+    my = oc_div(my, n)
+    DECL sxy : float<64> = 0.0
+    DECL sxx : float<64> = 0.0
+    DECL syy : float<64> = 0.0
+    i = 0
+    WHILE i < n {
+        DECL dx : float<64> = log(g_pt_cls_count[i] + 1.0) - mx
+        DECL dy : float<64> = nv_effect(i) - my
+        sxy = sxy + dx * dy
+        sxx = sxx + dx * dx
+        syy = syy + dy * dy
+        i = i + 1
+    }
+    RETURN sxy / (sqrt(sxx * syy) + OC_EPS)
+}
+
+# ---------------------------------------------------------------------------
+# NDS — Neglected Driver Score
+#
+#   NDS(g) = |z_expression(g)| - max(z_papers(g), z_patents(g))
+#
+# TOI asks "is the IP thin?".  NDS is stricter: it asks whether BOTH the
+# literature and the patent record are thin.  A high NDS gene separates
+# tumour from normal strongly while the world has largely not looked at it.
+# ---------------------------------------------------------------------------
+DECL nv_nds_gene : int<64> = -1
+DECL nv_nds_pap  : int<64> = 0
+DECL nv_nds_pat  : int<64> = 0
+
+FUNC novel_nds() : float<64> {
+    DECL best : float<64> = -1000.0
+    nv_nds_gene = -1
+    DECL g : int<64> = 0
+    WHILE g < g_expr_g {
+        DECL ei : int<64> = sc_find(CH_EXPR, g)
+        DECL pi : int<64> = sc_find(CH_PAT, g)
+        DECL li : int<64> = sc_find(CH_LIT, g)
+        IF ei >= 0 {
+            IF li >= 0 {
+                DECL bio : float<64> = oc_fabs(sc_z[ei])
+                DECL att : float<64> = sc_z[li]
+                IF pi >= 0 {
+                    IF sc_z[pi] > att {
+                        att = sc_z[pi]
+                    }
+                }
+                DECL nds : float<64> = bio - att
+                IF nds > best {
+                    best = nds
+                    nv_nds_gene = g
+                    nv_nds_pap = g_pp_gene[g]
+                    nv_nds_pat = g_pt_gene[g]
+                }
+            }
+        }
+        g = g + 1
+    }
+    IF nv_nds_gene < 0 {
+        RETURN 0.0
+    }
+    RETURN best
+}
+
+# ---------------------------------------------------------------------------
+# RIL — Research-to-IP Lag
+#
+# Both curves are real: cancer publications per year from Europe PMC and
+# oncology patent publications per year from the EPO, over the same 15 years.
+# RIL is the ratio of their compound growth rates.  Above 1 the science is
+# outrunning the IP; below 1 the patents are running ahead of the papers.
+# ---------------------------------------------------------------------------
+FUNC novel_ril() : float<64> {
+    DECL pat : float<64> = pt_velocity_cagr()
+    DECL lit : float<64> = pp_velocity_cagr()
+    IF oc_fabs(pat) < OC_EPS {
+        RETURN 0.0
+    }
+    RETURN lit / pat
+}
+
+# ---------------------------------------------------------------------------
+# ESI — Evidence Support Index
+#
+# The fraction of the platform's own thresholds and models that resolve to a
+# title-verified published reference, weighted towards well-cited work.  It
+# scores this software, not the tumour: a low ESI means the numbers in the
+# code are less defensible than they look.
+# ---------------------------------------------------------------------------
+FUNC novel_esi() : float<64> {
+    IF g_pp_ref_n == 0 {
+        RETURN 0.0
+    }
+    DECL s : float<64> = 0.0
+    DECL i : int<64> = 0
+    WHILE i < g_pp_ref_n {
+        IF g_pp_matched[i] == 1 {
+            DECL w : float<64> = 0.5
+            IF g_pp_cites[i] >= 500 {
+                w = 1.0
+            } ELSE {
+                IF g_pp_cites[i] >= 100 {
+                    w = 0.8
+                }
+            }
+            s = s + w
+        }
+        i = i + 1
+    }
+    RETURN oc_div(s, g_pp_ref_n)
+}
+
+# ---------------------------------------------------------------------------
+# register everything, and publish the novel signals into the scan table so
+# they are ranked alongside the measured ones
+# ---------------------------------------------------------------------------
+FUNC novel_all() : int<64> {
+    nv_n = 0
+    nv_nn = 0
+    DECL toi : float<64> = novel_toi()
+    nv_add(strbuf("TOI"), strbuf("translational opportunity index"), toi)
+    nv_add(strbuf("ICI"), strbuf("IP crowding index"), novel_ici())
+    nv_add(strbuf("HIA"), strbuf("hypoxia-immune antagonism"), novel_hia())
+    nv_add(strbuf("MGC"), strbuf("morphology-genomics concordance"), novel_mgc())
+    nv_add(strbuf("AEA"), strbuf("attention-effect alignment"), novel_aea())
+    nv_add(strbuf("ODC"), strbuf("orphan driver count"), nv_orphans)
+    nv_add(strbuf("NDS"), strbuf("neglected driver score"), novel_nds())
+    nv_add(strbuf("RIL"), strbuf("research-to-IP lag ratio"), novel_ril())
+    nv_add(strbuf("ESI"), strbuf("evidence support index"), novel_esi())
+
+    DECL i : int<64> = 0
+    WHILE i < nv_n {
+        sc_add(nv_abbr(i), CH_NOVEL, 300 + i, 8, nv_val[i])
+        i = i + 1
+    }
+    scan_zscore()
+    scan_rank()
+    RETURN nv_n
+}
+
+FUNC novel_toi_gene_name() : buf<> {
+    IF nv_toi_gene < 0 {
+        RETURN strbuf("(none)")
+    }
+    RETURN oc_gene_name(nv_toi_gene)
+}
+
+# patents recorded against the winning TOI target
+FUNC novel_toi_patents() : int<64> {
+    IF nv_toi_gene < 0 {
+        RETURN 0
+    }
+    RETURN g_pt_gene[nv_toi_gene]
+}
+
+# papers naming the winning TOI target
+FUNC novel_toi_papers() : int<64> {
+    IF nv_toi_gene < 0 {
+        RETURN 0
+    }
+    RETURN g_pp_gene[nv_toi_gene]
+}
+
+FUNC novel_nds_gene_name() : buf<> {
+    IF nv_nds_gene < 0 {
+        RETURN strbuf("(none)")
+    }
+    RETURN oc_gene_name(nv_nds_gene)
+}

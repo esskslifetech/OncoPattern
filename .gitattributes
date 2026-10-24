@@ -1,0 +1,44 @@
+# ============================================================================
+# OncoPattern — .gitattributes
+# ESS KS Life Tech · K-S (Kanishk-Soni)
+#
+# The build runs under WSL/POSIX shells, where a CRLF in a bash script is a
+# syntax error and a CRLF in a fixture changes the byte counts the parsers
+# assert on.  Everything text is therefore LF, in the repository and in every
+# checkout, on every platform.
+# ============================================================================
+
+* text=auto eol=lf
+
+# ------------------------------------------------------------------- scripts
+# shebang scripts are executed directly, so they must be LF and nothing else
+tools/*   text eol=lf
+*.sh      text eol=lf
+
+# ------------------------------------------------------------------ fixtures
+# byte-exact inputs: the parsers compare sizes, record counts and line numbers
+# against these, so no newline translation of any kind is allowed
+*.vcf   -text
+*.csv   -text
+*.json  -text
+*.pgm   -text
+
+# ------------------------------------------------------------------ binaries
+*.bmp     binary
+*.ppm     binary
+*.png     binary
+*.tfs     binary
+*.bin     binary
+*.tbc     binary
+*.techbin binary
+
+# --------------------------------------------------------- generated sources
+# build products never appear in a diff, but mark them if one is ever added
+dist/**   linguist-generated
+results/** linguist-generated
+
+# ---------------------------------------------------------- language stats
+# the product is .tech; keep it visible above the supporting Python and docs
+*.tech linguist-language=TECH
+*.md   linguist-documentation
+docs/* linguist-documentation

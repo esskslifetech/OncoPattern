@@ -1,0 +1,37 @@
+cff-version: 1.2.0
+message: "If you use OncoPattern in academic or technical work, please cite it as below."
+title: "OncoPattern: cancer pattern analysis, simulation and reporting on the TECH toolchain"
+abstract: >-
+  OncoPattern is a cancer pattern-analysis, simulation, visualisation and
+  reporting platform written entirely in .tech and running on the self-hosting
+  TECH toolchain. It ingests genomic, histological and clinical data, detects
+  registered patterns, runs mechanistic simulations, renders framebuffers and
+  byte-exact reports, and can be executed end to end without any other language.
+  The software is a demonstration platform, not a medical device.
+authors:
+  - family-names: "K-S"
+    given-names: "Kanishk-Soni"
+    affiliation: "ESS KS Life Tech"
+type: software
+license: Apache-2.0
+repository-code: "https://github.com/esskslifetech/OncoPattern"
+url: "https://github.com/esskslifetech/OncoPattern"
+version: 1.0.0
+date-released: 2026-10-24
+keywords:
+  - oncology
+  - cancer genomics
+  - digital pathology
+  - simulation
+  - scientific computing
+  - TECH language
+  - reproducible builds
+references:
+  - type: software
+    title: "TECH: a self-hosting programming language and toolchain"
+    authors:
+      - family-names: "K-S"
+        given-names: "Kanishk-Soni"
+        affiliation: "ESS KS Life Tech"
+    repository-code: "https://github.com/esskslifetech/TECH"
+    notes: "The compiler, VM and standard library this platform is built on."

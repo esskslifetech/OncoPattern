@@ -1,0 +1,125 @@
+# ============================================================================
+# oncopattern/pattern/compare.tech — cross-patient / cross-timepoint diff.
+#
+# Snapshots the whole registry so two runs (baseline vs follow-up, or two
+# patients) can be compared field by field.  Classification follows plan
+# §7.3: |delta%| < 5 MATCH, 5-20 MINOR_CHANGE, > 20 MAJOR_CHANGE.
+#
+# META @module(name:pat_compare, provides:pat_snapshot, requires:pat_classify)
+# ============================================================================
+
+IMPORT oncopattern/pattern/classify
+
+DECL CMP_MATCH : int<64> = 0
+DECL CMP_MINOR : int<64> = 1
+DECL CMP_MAJOR : int<64> = 2
+
+# two snapshot slots: 0 = baseline, 1 = follow-up
+DECL snap_score : buf<64, float<64>> = null    # slot * OC_NPAT + id
+DECL snap_conf  : buf<64, float<64>> = null
+DECL snap_grade : buf<64, int<64>>   = null
+DECL snap_det   : buf<64, int<64>>   = null
+DECL snap_taken : buf<4, int<64>>    = null
+
+DECL cmp_delta  : buf<32, float<64>> = null
+DECL cmp_pct    : buf<32, float<64>> = null
+DECL cmp_class  : buf<32, int<64>>   = null
+DECL cmp_alerts : int<64> = 0
+
+FUNC pat_snapshot(slot : int<64>) : int<64> {
+    DECL base : int<64> = slot * OC_NPAT
+    DECL i : int<64> = 0
+    WHILE i < OC_NPAT {
+        snap_score[base + i] = g_pat_score[i]
+        snap_conf[base + i] = g_pat_conf[i]
+        snap_grade[base + i] = g_pat_grade[i]
+        snap_det[base + i] = g_pat_detected[i]
+        i = i + 1
+    }
+    snap_taken[slot] = 1
+    RETURN OC_NPAT
+}
+
+FUNC cmp_class_name(c : int<64>) : buf<> {
+    MATCH c {
+        CASE 0 {
+            RETURN strbuf("MATCH")
+        }
+        CASE 1 {
+            RETURN strbuf("MINOR_CHANGE")
+        }
+        ELSE {
+            RETURN strbuf("MAJOR_CHANGE")
+        }
+    }
+}
+
+# Compare slot a (baseline) against slot b (follow-up).
+# Returns the number of MAJOR changes.
+FUNC pat_compare(a : int<64>, b : int<64>) : int<64> {
+    DECL ba : int<64> = a * OC_NPAT
+    DECL bb : int<64> = b * OC_NPAT
+    DECL majors : int<64> = 0
+    cmp_alerts = 0
+    DECL i : int<64> = 0
+    WHILE i < OC_NPAT {
+        DECL va : float<64> = snap_score[ba + i]
+        DECL vb : float<64> = snap_score[bb + i]
+        cmp_delta[i] = vb - va
+        cmp_pct[i] = oc_pct(vb, va)
+        DECL ap : float<64> = oc_fabs(cmp_pct[i])
+        IF ap < OC_DELTA_MATCH {
+            cmp_class[i] = CMP_MATCH
+        } ELSE {
+            IF ap < OC_DELTA_MINOR {
+                cmp_class[i] = CMP_MINOR
+            } ELSE {
+                cmp_class[i] = CMP_MAJOR
+                majors = majors + 1
+            }
+        }
+        # a grade escalation is an alert regardless of the percentage
+        IF snap_grade[bb + i] > snap_grade[ba + i] {
+            cmp_alerts = cmp_alerts + 1
+        }
+        i = i + 1
+    }
+    RETURN majors
+}
+
+# Is this pattern's change a clinical regression (worse for the patient)?
+# For most patterns "up" is worse; immune score and nutrient supply invert.
+FUNC cmp_is_regression(id : int<64>) : int<64> {
+    DECL d : float<64> = cmp_delta[id]
+    IF id == PAT_IMMUNE {
+        IF d < 0.0 {
+            RETURN 1
+        }
+        RETURN 0
+    }
+    IF id == PAT_DIFFUSION {
+        IF d < 0.0 {
+            RETURN 1
+        }
+        RETURN 0
+    }
+    IF cmp_class[id] == CMP_MATCH {
+        RETURN 0
+    }
+    IF d > 0.0 {
+        RETURN 1
+    }
+    RETURN 0
+}
+
+FUNC cmp_count_class(c : int<64>) : int<64> {
+    DECL k : int<64> = 0
+    DECL i : int<64> = 0
+    WHILE i < OC_NPAT {
+        IF cmp_class[i] == c {
+            k = k + 1
+        }
+        i = i + 1
+    }
+    RETURN k
+}

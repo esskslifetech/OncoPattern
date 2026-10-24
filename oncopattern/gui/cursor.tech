@@ -1,0 +1,81 @@
+# ============================================================================
+# oncopattern/gui/cursor.tech — pointer rendering and hit-testing state.
+#
+# The cursor is drawn last, over the composed frame, as a classic arrow with a
+# 1px outline so it stays visible on any background.  Hit-testing lives here
+# too, because "what is under the pointer" is the cursor's business.
+#
+# META @module(name:gui_cursor, provides:cursor_*, requires:gui_widgets)
+# ============================================================================
+
+IMPORT oncopattern/gui/widgets
+
+DECL cur_x : int<64> = 0
+DECL cur_y : int<64> = 0
+DECL cur_visible : int<64> = 1
+DECL cur_over : int<64> = -1        # widget index under the pointer
+DECL CUR_ARROW : int<64> = 0
+DECL CUR_CROSS : int<64> = 1
+DECL CUR_WAIT  : int<64> = 2
+DECL cur_shape : int<64> = 0
+
+FUNC cursor_move(x : int<64>, y : int<64>) : int<64> {
+    cur_x = oc_iclamp(x, 0, FB_W - 1)
+    cur_y = oc_iclamp(y, 0, FB_H - 1)
+    DECL prev : int<64> = cur_over
+    cur_over = widget_at(cur_x, cur_y)
+    # hover state transitions
+    IF prev >= 0 {
+        IF prev != cur_over {
+            IF wg_state[prev] == S_HOVER {
+                wg_state[prev] = S_NORMAL
+            }
+        }
+    }
+    IF cur_over >= 0 {
+        IF wg_state[cur_over] == S_NORMAL {
+            wg_state[cur_over] = S_HOVER
+        }
+    }
+    RETURN cur_over
+}
+
+# arrow glyph: 12 rows of a run-length outline
+FUNC cursor_draw() {
+    IF cur_visible == 0 {
+        RETURN 0
+    }
+    IF cur_shape == CUR_CROSS {
+        fb_rect(cur_x - 7, cur_y, 15, 1, 20, 22, 28)
+        fb_rect(cur_x, cur_y - 7, 1, 15, 20, 22, 28)
+        fb_rect(cur_x - 6, cur_y, 13, 1, 250, 250, 255)
+        fb_rect(cur_x, cur_y - 6, 1, 13, 250, 250, 255)
+        RETURN 1
+    }
+    DECL r : int<64> = 0
+    WHILE r < 12 {
+        DECL wdt : int<64> = 0
+        IF r < 8 {
+            wdt = r + 1
+        } ELSE {
+            IF r == 8 {
+                wdt = 5
+            } ELSE {
+                wdt = 3
+            }
+        }
+        DECL ox : int<64> = 0
+        IF r > 8 {
+            ox = r - 8
+        }
+        # outline then fill
+        fb_rect(cur_x + ox - 1, cur_y + r - 1, wdt + 2, 1, 12, 14, 18)
+        fb_rect(cur_x + ox, cur_y + r, wdt, 1, 248, 250, 255)
+        r = r + 1
+    }
+    RETURN 1
+}
+
+FUNC cursor_set_shape(s : int<64>) {
+    cur_shape = s
+}

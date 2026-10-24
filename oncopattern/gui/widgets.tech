@@ -1,0 +1,211 @@
+# ============================================================================
+# oncopattern/gui/widgets.tech — the widget system.
+#
+# A widget is the record described in plan §6.2 (kind, rect, colours, label,
+# state, children, on_click).  TECH has no array-of-struct type, so the table
+# is stored as parallel global typed buffers — the same memory layout a
+# data<...> array would have, with O(1) indexed access.
+#
+#   kind: 0 button  1 textfield  2 panel  3 scrollbar  4 tab  5 canvas
+#         6 label   7 checkbox   8 progress
+#   state: 0 normal 1 hover 2 pressed 3 disabled 4 active/selected
+#
+# META @module(name:gui_widgets, provides:widget_*, requires:gui_theme)
+# ============================================================================
+
+IMPORT oncopattern/gui/theme
+
+DECL W_BUTTON   : int<64> = 0
+DECL W_TEXT     : int<64> = 1
+DECL W_PANEL    : int<64> = 2
+DECL W_SCROLL   : int<64> = 3
+DECL W_TAB      : int<64> = 4
+DECL W_CANVAS   : int<64> = 5
+DECL W_LABEL    : int<64> = 6
+DECL W_CHECK    : int<64> = 7
+DECL W_PROGRESS : int<64> = 8
+
+DECL S_NORMAL   : int<64> = 0
+DECL S_HOVER    : int<64> = 1
+DECL S_PRESSED  : int<64> = 2
+DECL S_DISABLED : int<64> = 3
+DECL S_ACTIVE   : int<64> = 4
+
+DECL WG_MAX   : int<64> = 128
+DECL wg_kind  : buf<128, int<64>> = null
+DECL wg_x     : buf<128, int<64>> = null
+DECL wg_y     : buf<128, int<64>> = null
+DECL wg_w     : buf<128, int<64>> = null
+DECL wg_h     : buf<128, int<64>> = null
+DECL wg_state : buf<128, int<64>> = null
+DECL wg_group : buf<128, int<64>> = null     # radio/tab group id
+DECL wg_value : buf<128, float<64>> = null   # progress / scroll position
+DECL wg_click : buf<128, int<64>> = null     # action id fired on click
+DECL wg_lab_o : buf<128, int<64>> = null
+DECL wg_lab_n : buf<128, int<64>> = null
+DECL wg_labs  : buf<4096> = null
+DECL wg_labs_n : int<64> = 0
+DECL wg_n     : int<64> = 0
+
+FUNC widget_reset() {
+    wg_n = 0
+    wg_labs_n = 0
+}
+
+FUNC widget_add(kind : int<64>, x : int<64>, y : int<64>, w : int<64>, h : int<64>, label : buf<>, action : int<64>) : int<64> {
+    IF wg_n >= WG_MAX {
+        RETURN -1
+    }
+    DECL i : int<64> = wg_n
+    wg_kind[i] = kind
+    wg_x[i] = x
+    wg_y[i] = y
+    wg_w[i] = w
+    wg_h[i] = h
+    wg_state[i] = S_NORMAL
+    wg_group[i] = 0
+    wg_value[i] = 0.0
+    wg_click[i] = action
+    wg_lab_o[i] = wg_labs_n
+    wg_lab_n[i] = len(label)
+    wg_labs_n = oc_cat(wg_labs, wg_labs_n, label)
+    wg_n = wg_n + 1
+    RETURN i
+}
+
+FUNC widget_label(i : int<64>) : buf<> {
+    RETURN slice(wg_labs, wg_lab_o[i], wg_lab_n[i])
+}
+
+# hit test, walking the table back to front (last added = topmost)
+FUNC widget_at(mx : int<64>, my : int<64>) : int<64> {
+    DECL i : int<64> = wg_n - 1
+    WHILE i >= 0 {
+        IF wg_state[i] != S_DISABLED {
+            IF mx >= wg_x[i] {
+                IF my >= wg_y[i] {
+                    IF mx < wg_x[i] + wg_w[i] {
+                        IF my < wg_y[i] + wg_h[i] {
+                            RETURN i
+                        }
+                    }
+                }
+            }
+        }
+        i = i - 1
+    }
+    RETURN -1
+}
+
+# select one widget within a radio/tab group
+FUNC widget_select(i : int<64>) {
+    DECL grp : int<64> = wg_group[i]
+    DECL k : int<64> = 0
+    WHILE k < wg_n {
+        IF wg_group[k] == grp {
+            IF wg_kind[k] == wg_kind[i] {
+                IF wg_state[k] == S_ACTIVE {
+                    wg_state[k] = S_NORMAL
+                }
+            }
+        }
+        k = k + 1
+    }
+    wg_state[i] = S_ACTIVE
+}
+
+FUNC widget_draw_one(i : int<64>) {
+    DECL k : int<64> = wg_kind[i]
+    DECL st : int<64> = wg_state[i]
+    DECL x : int<64> = wg_x[i]
+    DECL y : int<64> = wg_y[i]
+    DECL w : int<64> = wg_w[i]
+    DECL h : int<64> = wg_h[i]
+
+    IF k == W_BUTTON {
+        DECL br : int<64> = TH_BAR_R
+        DECL bg : int<64> = TH_BAR_G
+        DECL bb : int<64> = TH_BAR_B
+        IF st == S_HOVER {
+            br = 46
+            bg = 56
+            bb = 74
+        }
+        IF st == S_PRESSED {
+            br = TH_ACC_R //// 3
+            bg = TH_ACC_G //// 3
+            bb = TH_ACC_B //// 3
+        }
+        IF st == S_ACTIVE {
+            br = 40
+            bg = 70
+            bb = 96
+        }
+        fb_rect(x, y, w, h, br, bg, bb)
+        fb_frame(x, y, w, h, TH_EDGE_R, TH_EDGE_G, TH_EDGE_B)
+        IF st == S_DISABLED {
+            fb_text_c(x, y + (h - 7) //// 2, w, widget_label(i), 1, 90, 96, 110)
+        } ELSE {
+            fb_text_c(x, y + (h - 7) //// 2, w, widget_label(i), 1, TH_TEXT_R, TH_TEXT_G, TH_TEXT_B)
+        }
+    }
+    IF k == W_TAB {
+        IF st == S_ACTIVE {
+            fb_rect(x, y, w, h, TH_PANEL_R, TH_PANEL_G, TH_PANEL_B)
+            fb_rect(x, y, w, 2, TH_ACC_R, TH_ACC_G, TH_ACC_B)
+            fb_text_c(x, y + (h - 7) //// 2, w, widget_label(i), 1, TH_TEXT_R, TH_TEXT_G, TH_TEXT_B)
+        } ELSE {
+            fb_rect(x, y, w, h, TH_BG_R, TH_BG_G, TH_BG_B)
+            fb_text_c(x, y + (h - 7) //// 2, w, widget_label(i), 1, TH_DIM_R, TH_DIM_G, TH_DIM_B)
+        }
+        fb_frame(x, y, w, h, TH_EDGE_R, TH_EDGE_G, TH_EDGE_B)
+    }
+    IF k == W_LABEL {
+        fb_text(x, y, widget_label(i), 1, TH_DIM_R, TH_DIM_G, TH_DIM_B)
+    }
+    IF k == W_PANEL {
+        theme_panel(x, y, w, h, widget_label(i))
+    }
+    IF k == W_TEXT {
+        fb_rect(x, y, w, h, 14, 17, 23)
+        fb_frame(x, y, w, h, TH_EDGE_R, TH_EDGE_G, TH_EDGE_B)
+        fb_text(x + 4, y + (h - 7) //// 2, widget_label(i), 1, TH_TEXT_R, TH_TEXT_G, TH_TEXT_B)
+        IF st == S_ACTIVE {
+            fb_rect(x + 5 + fb_text_w(widget_label(i), 1), y + 3, 1, h - 6, TH_ACC_R, TH_ACC_G, TH_ACC_B)
+        }
+    }
+    IF k == W_CHECK {
+        fb_frame(x, y + 2, 9, 9, TH_EDGE_R, TH_EDGE_G, TH_EDGE_B)
+        IF st == S_ACTIVE {
+            fb_rect(x + 2, y + 4, 5, 5, TH_ACC_R, TH_ACC_G, TH_ACC_B)
+        }
+        fb_text(x + 14, y + 3, widget_label(i), 1, TH_TEXT_R, TH_TEXT_G, TH_TEXT_B)
+    }
+    IF k == W_PROGRESS {
+        fb_rect(x, y, w, h, 14, 17, 23)
+        DECL fw : int<64> = (w - 2) * wg_value[i] //// 1
+        theme_grade_color(3)
+        fb_rect(x + 1, y + 1, fw, h - 2, TH_ACC_R //// 2, TH_ACC_G //// 2, TH_ACC_B)
+        fb_frame(x, y, w, h, TH_EDGE_R, TH_EDGE_G, TH_EDGE_B)
+        fb_text(x + w + 4, y, widget_label(i), 1, TH_DIM_R, TH_DIM_G, TH_DIM_B)
+    }
+    IF k == W_SCROLL {
+        fb_rect(x, y, w, h, 18, 21, 28)
+        DECL th : int<64> = h //// 4
+        DECL ty : int<64> = y + (h - th) * wg_value[i] //// 1
+        fb_rect(x + 1, ty, w - 2, th, 60, 70, 92)
+    }
+    IF k == W_CANVAS {
+        fb_rect(x, y, w, h, TH_BG_R, TH_BG_G, TH_BG_B)
+        fb_frame(x, y, w, h, TH_EDGE_R, TH_EDGE_G, TH_EDGE_B)
+    }
+}
+
+FUNC widget_draw_all() : int<64> {
+    DECL i : int<64> = 0
+    WHILE i < wg_n {
+        widget_draw_one(i)
+        i = i + 1
+    }
+    RETURN wg_n
+}

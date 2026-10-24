@@ -1,0 +1,545 @@
+# ============================================================================
+# oncopattern/report/sections.tech — the report record and its section
+# templates.
+#
+# Holds the report struct of plan §7.1 and renders each of the eight sections
+# from it.  Every renderer appends into a caller-supplied byte buffer and
+# returns the new offset, so sections compose in any order and the same code
+# serves the text and (via generator) the HTML exporter.
+#
+# META @module(name:rep_sections, provides:sec_*, requires:pat_log,pat_physical)
+# ============================================================================
+
+IMPORT oncopattern/pattern/log
+IMPORT oncopattern/pattern/physical
+IMPORT oncopattern/simulation/engine
+IMPORT oncopattern/pattern/novel
+
+# ------------------------------------------------------------ the record --
+DECL rep_patient  : buf<32> = null
+DECL rep_patient_n : int<64> = 0
+DECL rep_ct       : int<64> = 0
+DECL rep_stage    : int<64> = 0
+DECL rep_age      : int<64> = 0
+DECL rep_ts       : int<64> = 0
+# Deterministic mode (plan §10.3): wall-clock timings are the only part of a
+# report that legitimately varies between two identical runs.  Setting this
+# flag replaces them with a placeholder so the report checksum certifies the
+# analysis rather than the machine's speed.
+DECL rep_det_mode : int<64> = 0
+DECL rep_label    : buf<32> = null
+DECL rep_label_n  : int<64> = 0
+
+# statistics block (plan §7.1)
+DECL rep_tmb        : float<64> = 0.0
+DECL rep_msi        : float<64> = 0.0
+DECL rep_mut_count  : int<64> = 0
+DECL rep_volume     : float<64> = 0.0
+DECL rep_growth     : float<64> = 0.0
+DECL rep_immune     : float<64> = 0.0
+DECL rep_vascular   : float<64> = 0.0
+DECL rep_risk       : float<64> = 0.0
+DECL rep_necrosis   : float<64> = 0.0
+DECL rep_hypoxia    : float<64> = 0.0
+DECL REP_NSTAT      : int<64> = 10
+
+FUNC rep_stat(i : int<64>) : float<64> {
+    IF i == 0 {
+        RETURN rep_tmb
+    }
+    IF i == 1 {
+        RETURN rep_msi
+    }
+    IF i == 2 {
+        RETURN rep_mut_count
+    }
+    IF i == 3 {
+        RETURN rep_volume
+    }
+    IF i == 4 {
+        RETURN rep_growth
+    }
+    IF i == 5 {
+        RETURN rep_immune
+    }
+    IF i == 6 {
+        RETURN rep_vascular
+    }
+    IF i == 7 {
+        RETURN rep_risk
+    }
+    IF i == 8 {
+        RETURN rep_necrosis
+    }
+    RETURN rep_hypoxia
+}
+
+FUNC rep_stat_name(i : int<64>) : buf<> {
+    MATCH i {
+        CASE 0 {
+            RETURN strbuf("tumour mutational burden")
+        }
+        CASE 1 {
+            RETURN strbuf("MSI score")
+        }
+        CASE 2 {
+            RETURN strbuf("mutation count")
+        }
+        CASE 3 {
+            RETURN strbuf("tumour volume")
+        }
+        CASE 4 {
+            RETURN strbuf("growth rate")
+        }
+        CASE 5 {
+            RETURN strbuf("immune score")
+        }
+        CASE 6 {
+            RETURN strbuf("vascular density")
+        }
+        CASE 7 {
+            RETURN strbuf("risk index")
+        }
+        CASE 8 {
+            RETURN strbuf("necrotic fraction")
+        }
+        ELSE {
+            RETURN strbuf("hypoxic fraction")
+        }
+    }
+}
+
+FUNC rep_stat_unit(i : int<64>) : buf<> {
+    MATCH i {
+        CASE 0 {
+            RETURN strbuf("mut/Mb")
+        }
+        CASE 1 {
+            RETURN strbuf("KS")
+        }
+        CASE 2 {
+            RETURN strbuf("variants")
+        }
+        CASE 3 {
+            RETURN strbuf("cm3")
+        }
+        CASE 4 {
+            RETURN strbuf("1/day")
+        }
+        CASE 5 {
+            RETURN strbuf("ratio")
+        }
+        CASE 6 {
+            RETURN strbuf("fraction")
+        }
+        CASE 7 {
+            RETURN strbuf("0-100")
+        }
+        ELSE {
+            RETURN strbuf("fraction")
+        }
+    }
+}
+
+# ---------------------------------------------------------------- helpers --
+FUNC sec_rule(dst : buf<>, at : int<64>, n : int<64>) : int<64> {
+    at = oc_rep(dst, at, 61, n)
+    RETURN oc_nl(dst, at)
+}
+
+FUNC sec_thin(dst : buf<>, at : int<64>, n : int<64>) : int<64> {
+    at = oc_rep(dst, at, 45, n)
+    RETURN oc_nl(dst, at)
+}
+
+FUNC sec_head(dst : buf<>, at : int<64>, n : int<64>, title : buf<>) : int<64> {
+    at = oc_nl(dst, at)
+    at = oc_cati(dst, at, n)
+    at = oc_cat(dst, at, strbuf(". "))
+    at = oc_cat(dst, at, title)
+    at = oc_nl(dst, at)
+    RETURN sec_thin(dst, at, 74)
+}
+
+FUNC sec_kv(dst : buf<>, at : int<64>, k : buf<>, v : buf<>) : int<64> {
+    DECL s : int<64> = at
+    at = oc_cat(dst, at, strbuf("  "))
+    at = oc_cat(dst, at, k)
+    at = oc_pad(dst, at, s, 34)
+    at = oc_cat(dst, at, v)
+    RETURN oc_nl(dst, at)
+}
+
+FUNC sec_kvf(dst : buf<>, at : int<64>, k : buf<>, v : float<64>, dec : int<64>, unit : buf<>) : int<64> {
+    DECL s : int<64> = at
+    at = oc_cat(dst, at, strbuf("  "))
+    at = oc_cat(dst, at, k)
+    at = oc_pad(dst, at, s, 34)
+    at = oc_catf(dst, at, v, dec)
+    at = oc_pad(dst, at, s, 50)
+    at = oc_cat(dst, at, unit)
+    RETURN oc_nl(dst, at)
+}
+
+# ---------------------------------------------------------------- §1 ------
+FUNC sec_summary(dst : buf<>, at : int<64>) : int<64> {
+    at = sec_head(dst, at, 1, strbuf("PATIENT SUMMARY"))
+    at = sec_kv(dst, at, strbuf("patient id"), slice(rep_patient, 0, rep_patient_n))
+    at = sec_kv(dst, at, strbuf("timepoint"), slice(rep_label, 0, rep_label_n))
+    at = sec_kv(dst, at, strbuf("cancer type"), ct_name(rep_ct))
+    at = sec_kv(dst, at, strbuf("stage"), oc_itoa(rep_stage))
+    at = sec_kv(dst, at, strbuf("age"), oc_itoa(rep_age))
+    at = sec_kv(dst, at, strbuf("patterns detected"), oc_itoa(g_pat_n))
+    at = sec_kv(dst, at, strbuf("critical findings"), oc_itoa(classify_count_grade(GRADE_CRITICAL)))
+    at = sec_kvf(dst, at, strbuf("aggregate risk index"), rep_risk, 1, strbuf("/100"))
+    RETURN at
+}
+
+# ---------------------------------------------------------------- table ---
+# one row per detected pattern in a category
+# One row per pattern.  Row emitters are separate functions throughout this
+# file: a loop body with seven or more calls trips the machine's loop-fusion
+# fast path, and one call per iteration keeps the emitter on the plain
+# interpreter path with identical output.
+FUNC sec_pattern_row(dst : buf<>, at : int<64>, i : int<64>) : int<64> {
+    DECL s : int<64> = at
+    at = oc_cat(dst, at, strbuf("  "))
+    at = oc_cat(dst, at, pat_name(i))
+    at = oc_pad(dst, at, s, 28)
+    at = oc_catf(dst, at, g_pat_score[i], 4)
+    at = oc_pad(dst, at, s, 42)
+    at = oc_cat(dst, at, pat_unit(i))
+    at = oc_pad(dst, at, s, 62)
+    at = oc_cat(dst, at, grade_name(g_pat_grade[i]))
+    at = oc_pad(dst, at, s, 74)
+    at = oc_catf(dst, at, g_pat_conf[i], 2)
+    RETURN oc_nl(dst, at)
+}
+
+FUNC sec_pattern_table(dst : buf<>, at : int<64>, cat : int<64>) : int<64> {
+    DECL s0 : int<64> = at
+    at = oc_cat(dst, at, strbuf("  PATTERN"))
+    at = oc_pad(dst, at, s0, 28)
+    at = oc_cat(dst, at, strbuf("VALUE"))
+    at = oc_pad(dst, at, s0, 42)
+    at = oc_cat(dst, at, strbuf("UNIT"))
+    at = oc_pad(dst, at, s0, 62)
+    at = oc_cat(dst, at, strbuf("GRADE"))
+    at = oc_pad(dst, at, s0, 74)
+    at = oc_cat(dst, at, strbuf("CONF"))
+    at = oc_nl(dst, at)
+    at = sec_thin(dst, at, 82)
+    DECL i : int<64> = 0
+    WHILE i < OC_NPAT {
+        IF g_pat_detected[i] == 1 {
+            IF pat_category(i) == cat {
+                at = sec_pattern_row(dst, at, i)
+            }
+        }
+        i = i + 1
+    }
+    RETURN at
+}
+
+# ---------------------------------------------------------------- §2-4 ----
+FUNC sec_genomic(dst : buf<>, at : int<64>) : int<64> {
+    at = sec_head(dst, at, 2, strbuf("GENOMIC PATTERNS"))
+    at = sec_pattern_table(dst, at, CAT_GENOMIC)
+    at = oc_nl(dst, at)
+    at = sec_kvf(dst, at, strbuf("TMB status"), rep_tmb, 2, strbuf("mut/Mb"))
+    IF rep_tmb >= OC_TMB_HIGH {
+        at = sec_kv(dst, at, strbuf("  interpretation"), strbuf("TMB-HIGH: checkpoint inhibitor candidate"))
+    } ELSE {
+        at = sec_kv(dst, at, strbuf("  interpretation"), strbuf("TMB below the 10 mut/Mb threshold"))
+    }
+    at = sec_kvf(dst, at, strbuf("MSI (KS statistic)"), rep_msi, 4, strbuf(""))
+    IF rep_msi >= OC_MSI_HIGH {
+        at = sec_kv(dst, at, strbuf("  interpretation"), strbuf("MSI-HIGH pattern in variant spacing"))
+    }
+    at = sec_kvf(dst, at, strbuf("SNV hotspot density"), g_pat_score[PAT_SNV_CLUSTER], 0, strbuf("per 5kb"))
+    at = sec_kv(dst, at, strbuf("  hotspot locus"), oc_itoa(g_pat_loc[PAT_SNV_CLUSTER]))
+    at = sec_kv(dst, at, strbuf("  hotspot position"), oc_itoa(g_pat_loc2[PAT_SNV_CLUSTER]))
+    at = sec_kvf(dst, at, strbuf("NMF reconstruction error"), g_pat_score[PAT_MUT_SIGNATURE], 4, strbuf("relative"))
+    RETURN at
+}
+
+FUNC sec_histology(dst : buf<>, at : int<64>) : int<64> {
+    at = sec_head(dst, at, 3, strbuf("HISTOLOGICAL PATTERNS"))
+    at = sec_pattern_table(dst, at, CAT_HISTOLOGICAL)
+    at = oc_nl(dst, at)
+    at = sec_kv(dst, at, strbuf("field size"), oc_itoa(g_img_w))
+    at = sec_kvf(dst, at, strbuf("nuclei detected"), g_pat_loc[PAT_PLEOMORPHISM], 0, strbuf("objects"))
+    at = sec_kvf(dst, at, strbuf("mean nuclear area"), g_pat_loc2[PAT_PLEOMORPHISM], 0, strbuf("px"))
+    at = sec_kvf(dst, at, strbuf("necrotic fraction"), rep_necrosis, 4, strbuf("of field"))
+    RETURN at
+}
+
+FUNC sec_physical(dst : buf<>, at : int<64>) : int<64> {
+    at = sec_head(dst, at, 4, strbuf("PHYSICAL PATTERNS"))
+    at = sec_pattern_table(dst, at, CAT_PHYSICAL)
+    at = oc_nl(dst, at)
+    at = sec_kvf(dst, at, strbuf("logistic fit R2"), g_pat_conf[PAT_GROWTH], 6, strbuf(""))
+    at = sec_kvf(dst, at, strbuf("doubling time"), g_pat_loc2[PAT_GROWTH], 0, strbuf("days"))
+    at = sec_kvf(dst, at, strbuf("core nutrient"), g_pat_score[PAT_DIFFUSION], 4, strbuf("normalised"))
+    at = sec_kvf(dst, at, strbuf("hypoxic fraction"), rep_hypoxia, 4, strbuf("of tumour"))
+    at = sec_kvf(dst, at, strbuf("ablation zone"), g_pat_score[PAT_ABLATION], 4, strbuf("cm3 >60C"))
+    at = sec_kvf(dst, at, strbuf("peak temperature"), ablation_peak_temp(), 2, strbuf("degC"))
+    at = sec_kvf(dst, at, strbuf("mean target dose"), g_pat_score[PAT_RADIATION], 2, strbuf("Gy"))
+    at = sec_kvf(dst, at, strbuf("dose D95"), ph_dose_d95, 2, strbuf("Gy"))
+    at = sec_kvf(dst, at, strbuf("peak tissue stress"), g_pat_score[PAT_STRESS], 4, strbuf("kPa"))
+    RETURN at
+}
+
+# ---------------------------------------------------------------- §5 ------
+FUNC sec_sim_row(dst : buf<>, at : int<64>, m : int<64>) : int<64> {
+    DECL s : int<64> = at
+    at = oc_cat(dst, at, strbuf("  "))
+    at = oc_cat(dst, at, sim_model_name(m))
+    at = oc_pad(dst, at, s, 24)
+    at = oc_cat(dst, at, sim_engine_name(m))
+    at = oc_pad(dst, at, s, 48)
+    at = oc_catf(dst, at, sim_result[m], 4)
+    at = oc_pad(dst, at, s, 68)
+    IF rep_det_mode == 1 {
+        at = oc_cat(dst, at, strbuf("-"))
+    } ELSE {
+        at = oc_cati(dst, at, sim_ms[m])
+    }
+    RETURN oc_nl(dst, at)
+}
+
+FUNC sec_simulation(dst : buf<>, at : int<64>) : int<64> {
+    at = sec_head(dst, at, 5, strbuf("SIMULATION RESULTS"))
+    DECL s0 : int<64> = at
+    at = oc_cat(dst, at, strbuf("  MODEL"))
+    at = oc_pad(dst, at, s0, 24)
+    at = oc_cat(dst, at, strbuf("ENGINE"))
+    at = oc_pad(dst, at, s0, 48)
+    at = oc_cat(dst, at, strbuf("RESULT"))
+    at = oc_pad(dst, at, s0, 68)
+    at = oc_cat(dst, at, strbuf("MS"))
+    at = oc_nl(dst, at)
+    at = sec_thin(dst, at, 82)
+    DECL m : int<64> = 0
+    WHILE m < SIM_N {
+        IF sim_ran[m] == 1 {
+            at = sec_sim_row(dst, at, m)
+        }
+        m = m + 1
+    }
+    at = oc_nl(dst, at)
+    at = sec_kv(dst, at, strbuf("immune regime"), immune_regime_name(immune_regime()))
+    at = sec_kv(dst, at, strbuf("top metastatic target"), oc_node_name(mets_top_target(0)))
+    at = oc_cat(dst, at, strbuf("  route                            "))
+    at = mets_route_text(mets_top_target(0), dst, at)
+    at = oc_nl(dst, at)
+    at = sec_kvf(dst, at, strbuf("SSA events simulated"), ssa_events, 0, strbuf("firings"))
+    at = sec_kvf(dst, at, strbuf("Markov mass conservation"), cascade_mass(), 6, strbuf("must be 1"))
+    RETURN at
+}
+
+# ---------------------------------------------------------------- §6 ------
+FUNC sec_gallery(dst : buf<>, at : int<64>) : int<64> {
+    at = sec_head(dst, at, 6, strbuf("VISUALISATION GALLERY"))
+    at = sec_kv(dst, at, strbuf("heatmap view"), strbuf("gui_heatmap.bmp"))
+    at = sec_kv(dst, at, strbuf("metastasis graph"), strbuf("gui_graph.bmp"))
+    at = sec_kv(dst, at, strbuf("timeseries view"), strbuf("gui_timeseries.bmp"))
+    at = sec_kv(dst, at, strbuf("spatial fields"), strbuf("gui_spatial.bmp"))
+    at = sec_kv(dst, at, strbuf("vector export"), strbuf("figures.svg"))
+    RETURN at
+}
+
+# ---------------------------------------------------------------- §7 ------
+FUNC sec_statistics(dst : buf<>, at : int<64>) : int<64> {
+    at = sec_head(dst, at, 7, strbuf("STATISTICAL SUMMARY"))
+    DECL i : int<64> = 0
+    WHILE i < REP_NSTAT {
+        at = sec_kvf(dst, at, rep_stat_name(i), rep_stat(i), 4, rep_stat_unit(i))
+        i = i + 1
+    }
+    RETURN at
+}
+
+# ---------------------------------------------------------------- §9 ------
+# the exhaustive signal sweep
+FUNC sec_scan_row(dst : buf<>, at : int<64>, rank : int<64>) : int<64> {
+    DECL id : int<64> = sc_rank[rank]
+    DECL s : int<64> = at
+    at = oc_cat(dst, at, strbuf("  "))
+    at = oc_cati(dst, at, rank + 1)
+    at = oc_pad(dst, at, s, 7)
+    at = oc_cat(dst, at, scan_chan_name(sc_chan[id]))
+    at = oc_pad(dst, at, s, 21)
+    at = oc_cat(dst, at, sc_name(id))
+    at = oc_pad(dst, at, s, 48)
+    at = oc_catf(dst, at, sc_val[id], 4)
+    at = oc_pad(dst, at, s, 66)
+    at = oc_cat(dst, at, scan_unit(sc_unit[id]))
+    at = oc_pad(dst, at, s, 82)
+    at = oc_catf(dst, at, sc_z[id], 2)
+    RETURN oc_nl(dst, at)
+}
+
+FUNC sec_signal_scan(dst : buf<>, at : int<64>, topn : int<64>) : int<64> {
+    at = sec_head(dst, at, 9, strbuf("EXHAUSTIVE SIGNAL SCAN"))
+    at = sec_kv(dst, at, strbuf("signals measured"), oc_itoa(sc_n))
+    at = sec_kv(dst, at, strbuf("clearing |z| >= 2"), oc_itoa(scan_significant()))
+    DECL c : int<64> = 0
+    WHILE c < CH_N {
+        at = sec_kv(dst, at, scan_chan_name(c), oc_itoa(scan_count_in(c)))
+        c = c + 1
+    }
+    at = oc_nl(dst, at)
+    DECL s0 : int<64> = at
+    at = oc_cat(dst, at, strbuf("  RANK"))
+    at = oc_pad(dst, at, s0, 21)
+    at = oc_cat(dst, at, strbuf("CHANNEL / SIGNAL"))
+    at = oc_pad(dst, at, s0, 48)
+    at = oc_cat(dst, at, strbuf("VALUE"))
+    at = oc_pad(dst, at, s0, 66)
+    at = oc_cat(dst, at, strbuf("UNIT"))
+    at = oc_pad(dst, at, s0, 82)
+    at = oc_cat(dst, at, strbuf("Z"))
+    at = oc_nl(dst, at)
+    at = sec_thin(dst, at, 90)
+    IF topn > sc_n {
+        topn = sc_n
+    }
+    DECL i : int<64> = 0
+    WHILE i < topn {
+        at = sec_scan_row(dst, at, i)
+        i = i + 1
+    }
+    RETURN at
+}
+
+# ---------------------------------------------------------------- §10 -----
+# the invented composites, and the patent landscape they draw on
+FUNC sec_novel_row(dst : buf<>, at : int<64>, i : int<64>) : int<64> {
+    DECL s : int<64> = at
+    at = oc_cat(dst, at, strbuf("  "))
+    at = oc_cat(dst, at, nv_abbr(i))
+    at = oc_pad(dst, at, s, 9)
+    at = oc_cat(dst, at, nv_name(i))
+    at = oc_pad(dst, at, s, 50)
+    at = oc_catf(dst, at, nv_val[i], 4)
+    RETURN oc_nl(dst, at)
+}
+
+FUNC sec_novel(dst : buf<>, at : int<64>) : int<64> {
+    at = sec_head(dst, at, 10, strbuf("NOVEL SIGNALS (COINED BY THIS PLATFORM)"))
+    at = oc_cat(dst, at, strbuf("  These composites do not exist in the source data; each combines\n"))
+    at = oc_cat(dst, at, strbuf("  channels that are normally read separately.\n\n"))
+    DECL i : int<64> = 0
+    WHILE i < nv_n {
+        at = sec_novel_row(dst, at, i)
+        i = i + 1
+    }
+    at = oc_nl(dst, at)
+    at = sec_kv(dst, at, strbuf("TOI leading target"), novel_toi_gene_name())
+    at = sec_kvf(dst, at, strbuf("  its biology z-score"), nv_toi_bio, 2, strbuf("sd"))
+    at = sec_kv(dst, at, strbuf("  its patent count"), oc_itoa(novel_toi_patents()))
+    at = sec_kv(dst, at, strbuf("  reading"), strbuf("strong separation, thin IP"))
+    at = oc_nl(dst, at)
+    at = oc_nl(dst, at)
+    at = sec_kv(dst, at, strbuf("NDS leading target"), novel_nds_gene_name())
+    at = sec_kv(dst, at, strbuf("  its papers"), oc_itoa(nv_nds_pap))
+    at = sec_kv(dst, at, strbuf("  its patents"), oc_itoa(nv_nds_pat))
+    at = sec_kv(dst, at, strbuf("  reading"), strbuf("strong biology, little attention"))
+    at = sec_kv(dst, at, strbuf("TOI target papers"), oc_itoa(novel_toi_papers()))
+    at = oc_nl(dst, at)
+    at = sec_kv(dst, at, strbuf("patent source"), strbuf("EPO linked open data, IPC A61P35/00"))
+    at = sec_kv(dst, at, strbuf("retrieved"), pt_retrieved())
+    at = sec_kv(dst, at, strbuf("classes surveyed"), oc_itoa(g_pt_cls_n))
+    at = sec_kvf(dst, at, strbuf("publication velocity"), pt_velocity_slope(), 1, strbuf("docs/year"))
+    at = sec_kvf(dst, at, strbuf("velocity CAGR"), pt_velocity_cagr() * 100.0, 2, strbuf("percent"))
+    at = sec_kvf(dst, at, strbuf("applicant concentration"), pt_applicant_hhi(), 4, strbuf("HHI"))
+    at = sec_kv(dst, at, strbuf("leading applicant"), pt_applicant(0))
+    at = sec_kv(dst, at, strbuf("literature source"), strbuf("Europe PMC (EMBL-EBI)"))
+    at = sec_kvf(dst, at, strbuf("literature velocity"), pp_velocity_slope(), 1, strbuf("papers/year"))
+    at = sec_kvf(dst, at, strbuf("literature CAGR"), pp_velocity_cagr() * 100.0, 2, strbuf("percent"))
+    RETURN at
+}
+
+# ---------------------------------------------------------------- §11 -----
+# The published evidence base.  Every threshold and every model in this
+# platform is listed with the paper that establishes it, so the numbers can be
+# checked rather than trusted.
+FUNC sec_ref_row(dst : buf<>, at : int<64>, i : int<64>) : int<64> {
+    DECL s : int<64> = at
+    at = oc_cat(dst, at, strbuf("  "))
+    at = oc_cat(dst, at, pp_key(i))
+    at = oc_pad(dst, at, s, 16)
+    at = oc_cat(dst, at, pp_backs(i))
+    at = oc_pad(dst, at, s, 58)
+    at = oc_cat(dst, at, pp_author(i))
+    at = oc_pad(dst, at, s, 78)
+    at = oc_cat(dst, at, pp_journal_short(i, 22))
+    at = oc_pad(dst, at, s, 101)
+    at = oc_cati(dst, at, g_pp_year[i])
+    at = oc_pad(dst, at, s, 108)
+    at = oc_cati(dst, at, g_pp_cites[i])
+    at = oc_pad(dst, at, s, 116)
+    at = oc_cat(dst, at, strbuf("PMID "))
+    at = oc_cat(dst, at, pp_pmid(i))
+    RETURN oc_nl(dst, at)
+}
+
+FUNC sec_ref_title(dst : buf<>, at : int<64>, i : int<64>) : int<64> {
+    at = oc_cat(dst, at, strbuf("       "))
+    at = oc_cat(dst, at, pp_title(i))
+    RETURN oc_nl(dst, at)
+}
+
+FUNC sec_evidence(dst : buf<>, at : int<64>) : int<64> {
+    at = sec_head(dst, at, 11, strbuf("PUBLISHED EVIDENCE BASE"))
+    at = sec_kv(dst, at, strbuf("source"), strbuf("Europe PMC (EMBL-EBI), title-verified"))
+    at = sec_kv(dst, at, strbuf("retrieved"), pp_retrieved())
+    at = sec_kv(dst, at, strbuf("references resolved"), oc_itoa(g_pp_ref_ok))
+    at = sec_kv(dst, at, strbuf("of thresholds and models"), oc_itoa(g_pp_ref_n))
+    at = sec_kv(dst, at, strbuf("total citations behind them"), oc_itoa(pp_total_citations()))
+    at = sec_kv(dst, at, strbuf("oldest reference"), oc_itoa(pp_oldest_year()))
+    at = oc_nl(dst, at)
+    DECL s0 : int<64> = at
+    at = oc_cat(dst, at, strbuf("  KEY"))
+    at = oc_pad(dst, at, s0, 16)
+    at = oc_cat(dst, at, strbuf("BACKS"))
+    at = oc_pad(dst, at, s0, 58)
+    at = oc_cat(dst, at, strbuf("FIRST AUTHOR"))
+    at = oc_pad(dst, at, s0, 78)
+    at = oc_cat(dst, at, strbuf("JOURNAL"))
+    at = oc_pad(dst, at, s0, 101)
+    at = oc_cat(dst, at, strbuf("YEAR"))
+    at = oc_pad(dst, at, s0, 108)
+    at = oc_cat(dst, at, strbuf("CITES"))
+    at = oc_nl(dst, at)
+    at = sec_thin(dst, at, 130)
+    DECL i : int<64> = 0
+    WHILE i < g_pp_ref_n {
+        at = sec_ref_row(dst, at, i)
+        at = sec_ref_title(dst, at, i)
+        i = i + 1
+    }
+    RETURN at
+}
+
+# --------------------------------------------------------------- header ---
+FUNC sec_title(dst : buf<>, at : int<64>) : int<64> {
+    at = sec_rule(dst, at, 74)
+    at = oc_cat(dst, at, strbuf("ONCOPATTERN ANALYSIS REPORT\n"))
+    at = oc_cat(dst, at, strbuf("cancer pattern analysis, simulation and reporting — built in pure TECH\n"))
+    at = oc_cat(dst, at, oc_company())
+    at = oc_cat(dst, at, strbuf("  ·  "))
+    at = oc_cat(dst, at, oc_author())
+    at = oc_nl(dst, at)
+    at = oc_cat(dst, at, oc_repo())
+    at = oc_nl(dst, at)
+    at = sec_rule(dst, at, 74)
+    IF rep_det_mode == 1 {
+        at = sec_kv(dst, at, strbuf("generated"), strbuf("(deterministic mode)"))
+    } ELSE {
+        at = sec_kv(dst, at, strbuf("generated (ms since boot)"), oc_itoa(rep_ts))
+    }
+    at = sec_kv(dst, at, strbuf("toolchain"), strbuf("compiler.tech / vm.tech / techc"))
+    RETURN at
+}

@@ -1,0 +1,140 @@
+# ============================================================================
+# oncopattern/visualization/timeseries.tech — line charts.
+#
+# Axes with ticks, gridlines, a legend and up to four series.  Values are
+# supplied through a small "plot job" API (the language has no closures or
+# function pointers into buffers, so a series is registered as a buffer id).
+#
+# META @module(name:vis_timeseries, provides:ts_plot, requires:vis_renderer)
+# ============================================================================
+
+IMPORT oncopattern/visualization/renderer
+
+DECL TS_MAXSER : int<64> = 4
+DECL ts_data   : buf<2048, float<64>> = null    # series * 512 + i
+DECL ts_len    : buf<8, int<64>>   = null
+DECL ts_col_r  : buf<8, int<64>>   = null
+DECL ts_col_g  : buf<8, int<64>>   = null
+DECL ts_col_b  : buf<8, int<64>>   = null
+DECL ts_lab_off: buf<8, int<64>>   = null
+DECL ts_lab    : buf<512> = null
+DECL ts_lab_len: buf<8, int<64>>   = null
+DECL ts_n      : int<64> = 0
+DECL ts_ymin   : float<64> = 0.0
+DECL ts_ymax   : float<64> = 1.0
+DECL ts_logy   : int<64> = 0
+
+FUNC ts_reset() {
+    ts_n = 0
+    ts_ymin = 0.0
+    ts_ymax = 0.0
+    ts_logy = 0
+}
+
+# begin a new series; returns its index
+FUNC ts_series(label : buf<>, r : int<64>, g : int<64>, b : int<64>) : int<64> {
+    IF ts_n >= TS_MAXSER {
+        RETURN -1
+    }
+    DECL s : int<64> = ts_n
+    ts_len[s] = 0
+    ts_col_r[s] = r
+    ts_col_g[s] = g
+    ts_col_b[s] = b
+    DECL at : int<64> = s * 64
+    ts_lab_off[s] = at
+    ts_lab_len[s] = len(label)
+    DECL i : int<64> = 0
+    WHILE i < len(label) {
+        ts_lab[at + i] = label[i]
+        i = i + 1
+    }
+    ts_n = ts_n + 1
+    RETURN s
+}
+
+FUNC ts_push(s : int<64>, v : float<64>) {
+    IF ts_len[s] < 512 {
+        ts_data[s * 512 + ts_len[s]] = v
+        ts_len[s] = ts_len[s] + 1
+    }
+}
+
+FUNC ts_autoscale() {
+    ts_ymin = 1000000000000.0
+    ts_ymax = -1000000000000.0
+    DECL s : int<64> = 0
+    WHILE s < ts_n {
+        DECL i : int<64> = 0
+        WHILE i < ts_len[s] {
+            DECL v : float<64> = ts_data[s * 512 + i]
+            IF v < ts_ymin {
+                ts_ymin = v
+            }
+            IF v > ts_ymax {
+                ts_ymax = v
+            }
+            i = i + 1
+        }
+        s = s + 1
+    }
+    IF ts_ymax - ts_ymin < OC_EPS {
+        ts_ymax = ts_ymin + 1.0
+    }
+}
+
+FUNC ts_ypx(v : float<64>, y : int<64>, h : int<64>) : int<64> {
+    DECL t : float<64> = (v - ts_ymin) / (ts_ymax - ts_ymin)
+    IF ts_logy == 1 {
+        DECL lv : float<64> = log(oc_fmax(v, 1.0))
+        DECL lo : float<64> = log(oc_fmax(ts_ymin, 1.0))
+        DECL hi : float<64> = log(oc_fmax(ts_ymax, 10.0))
+        t = (lv - lo) / (hi - lo + OC_EPS)
+    }
+    RETURN y + h - (t * h) //// 1
+}
+
+# Draw all registered series into (x,y,w,h) with axes and a legend.
+FUNC ts_plot(x : int<64>, y : int<64>, w : int<64>, h : int<64>, title : buf<>, xlabel : buf<>) : int<64> {
+    DECL padl : int<64> = 52
+    DECL padb : int<64> = 22
+    DECL padt : int<64> = 16
+    DECL px : int<64> = x + padl
+    DECL py : int<64> = y + padt
+    DECL pw : int<64> = w - padl - 12
+    DECL ph : int<64> = h - padt - padb
+    ts_autoscale()
+    fb_text(x + 4, y + 2, title, 1, 225, 230, 240)
+    # gridlines + y labels
+    DECL k : int<64> = 0
+    WHILE k <= 4 {
+        DECL gy : int<64> = py + (ph * k) //// 4
+        fb_rect(px, gy, pw, 1, 44, 50, 62)
+        DECL v : float<64> = ts_ymax - (ts_ymax - ts_ymin) * k / 4.0
+        fb_text(x + 2, gy - 3, oc_ftoa(v, 2), 1, 150, 158, 175)
+        k = k + 1
+    }
+    fb_rect(px, py + ph, pw, 1, 110, 120, 140)
+    fb_rect(px, py, 1, ph, 110, 120, 140)
+    fb_text(x + padl + pw //// 2 - 20, y + h - 10, xlabel, 1, 165, 172, 190)
+    # series
+    DECL s : int<64> = 0
+    WHILE s < ts_n {
+        DECL n : int<64> = ts_len[s]
+        DECL i : int<64> = 1
+        WHILE i < n {
+            DECL x0 : int<64> = px + ((i - 1) * pw) //// (n - 1)
+            DECL x1 : int<64> = px + (i * pw) //// (n - 1)
+            DECL y0 : int<64> = ts_ypx(ts_data[s * 512 + i - 1], py, ph)
+            DECL y1 : int<64> = ts_ypx(ts_data[s * 512 + i], py, ph)
+            fb_line(x0, y0, x1, y1, ts_col_r[s], ts_col_g[s], ts_col_b[s])
+            i = i + 1
+        }
+        # legend swatch
+        DECL ly : int<64> = y + padt + 4 + s * 10
+        fb_rect(x + w - 96, ly, 8, 6, ts_col_r[s], ts_col_g[s], ts_col_b[s])
+        fb_text(x + w - 84, ly - 1, slice(ts_lab, ts_lab_off[s], ts_lab_len[s]), 1, 195, 202, 215)
+        s = s + 1
+    }
+    RETURN ts_n
+}

@@ -1,0 +1,410 @@
+{
+ "source": "EPO Linked Open Data SPARQL (data.epo.org/linked-data/query)",
+ "retrieved": "2026-08-23",
+ "oncology_class": "A61P35-00 antineoplastic agents",
+ "n_genes": 40,
+ "n_classes": 12,
+ "n_years": 15,
+ "year0": 2010,
+ "n_applicants": 12,
+ "genes": [
+  {
+   "term": "EGFR",
+   "index": 0,
+   "count": 505
+  },
+  {
+   "term": "KRAS",
+   "index": 1,
+   "count": 312
+  },
+  {
+   "term": "TP53",
+   "index": 2,
+   "count": 13
+  },
+  {
+   "term": "MYC",
+   "index": 3,
+   "count": 48
+  },
+  {
+   "term": "VEGFA",
+   "index": 4,
+   "count": 10
+  },
+  {
+   "term": "MKI67",
+   "index": 5,
+   "count": 0
+  },
+  {
+   "term": "CCND1",
+   "index": 6,
+   "count": 0
+  },
+  {
+   "term": "AURKA",
+   "index": 7,
+   "count": 0
+  },
+  {
+   "term": "PTEN",
+   "index": 8,
+   "count": 15
+  },
+  {
+   "term": "RB1",
+   "index": 9,
+   "count": 1
+  },
+  {
+   "term": "BRCA1",
+   "index": 10,
+   "count": 12
+  },
+  {
+   "term": "BRCA2",
+   "index": 11,
+   "count": 13
+  },
+  {
+   "term": "ATM",
+   "index": 12,
+   "count": 36
+  },
+  {
+   "term": "CDKN2A",
+   "index": 13,
+   "count": 0
+  },
+  {
+   "term": "SMAD4",
+   "index": 14,
+   "count": 0
+  },
+  {
+   "term": "APC",
+   "index": 15,
+   "count": 15
+  },
+  {
+   "term": "ALK",
+   "index": 16,
+   "count": 73
+  },
+  {
+   "term": "ROS1",
+   "index": 17,
+   "count": 7
+  },
+  {
+   "term": "MET",
+   "index": 18,
+   "count": 273
+  },
+  {
+   "term": "ERBB2",
+   "index": 19,
+   "count": 67
+  },
+  {
+   "term": "PIK3CA",
+   "index": 20,
+   "count": 7
+  },
+  {
+   "term": "AKT1",
+   "index": 21,
+   "count": 6
+  },
+  {
+   "term": "MTOR",
+   "index": 22,
+   "count": 176
+  },
+  {
+   "term": "STK11",
+   "index": 23,
+   "count": 3
+  },
+  {
+   "term": "KEAP1",
+   "index": 24,
+   "count": 4
+  },
+  {
+   "term": "NFE2L2",
+   "index": 25,
+   "count": 0
+  },
+  {
+   "term": "CTNNB1",
+   "index": 26,
+   "count": 1
+  },
+  {
+   "term": "NOTCH1",
+   "index": 27,
+   "count": 6
+  },
+  {
+   "term": "JAK2",
+   "index": 28,
+   "count": 33
+  },
+  {
+   "term": "STAT3",
+   "index": 29,
+   "count": 66
+  },
+  {
+   "term": "IL6",
+   "index": 30,
+   "count": 11
+  },
+  {
+   "term": "CD8A",
+   "index": 31,
+   "count": 0
+  },
+  {
+   "term": "PDCD1",
+   "index": 32,
+   "count": 0
+  },
+  {
+   "term": "CD274",
+   "index": 33,
+   "count": 7
+  },
+  {
+   "term": "FOXP3",
+   "index": 34,
+   "count": 11
+  },
+  {
+   "term": "GZMB",
+   "index": 35,
+   "count": 0
+  },
+  {
+   "term": "PRF1",
+   "index": 36,
+   "count": 0
+  },
+  {
+   "term": "IFNG",
+   "index": 37,
+   "count": 0
+  },
+  {
+   "term": "TGFB1",
+   "index": 38,
+   "count": 1
+  },
+  {
+   "term": "COL1A1",
+   "index": 39,
+   "count": 0
+  }
+ ],
+ "classes": [
+  {
+   "code": "A61P35-00",
+   "label": "antineoplastic agents",
+   "maps_to": "oncology overall",
+   "index": 0,
+   "count": 94844
+  },
+  {
+   "code": "A61P35-02",
+   "label": "antineoplastics leukaemia",
+   "maps_to": "haematological",
+   "index": 1,
+   "count": 8771
+  },
+  {
+   "code": "A61N5-10",
+   "label": "radiotherapy",
+   "maps_to": "radiation model",
+   "index": 2,
+   "count": 6933
+  },
+  {
+   "code": "A61B18-14",
+   "label": "RF electro-surgery",
+   "maps_to": "thermal_ablation model",
+   "index": 3,
+   "count": 13120
+  },
+  {
+   "code": "A61K39-395",
+   "label": "antibody immunotherapy",
+   "maps_to": "immune_interaction model",
+   "index": 4,
+   "count": 38814
+  },
+  {
+   "code": "A61K9-51",
+   "label": "nanoparticle delivery",
+   "maps_to": "drug_pkpd model",
+   "index": 5,
+   "count": 4395
+  },
+  {
+   "code": "C12Q1-6886",
+   "label": "nucleic acid cancer assay",
+   "maps_to": "genomic detectors",
+   "index": 6,
+   "count": 3996
+  },
+  {
+   "code": "G01N33-574",
+   "label": "tumour marker immunoassay",
+   "maps_to": "biomarker detectors",
+   "index": 7,
+   "count": 13638
+  },
+  {
+   "code": "A61K41-00",
+   "label": "photodynamic ablation",
+   "maps_to": "ablation adjunct",
+   "index": 8,
+   "count": 3619
+  },
+  {
+   "code": "G06T7-00",
+   "label": "image analysis",
+   "maps_to": "histology detectors",
+   "index": 9,
+   "count": 25504
+  },
+  {
+   "code": "G16H50-20",
+   "label": "clinical decision support",
+   "maps_to": "reporting layer",
+   "index": 10,
+   "count": 5456
+  },
+  {
+   "code": "A61B5-055",
+   "label": "MRI diagnostics",
+   "maps_to": "spatial imaging",
+   "index": 11,
+   "count": 8535
+  }
+ ],
+ "velocity": [
+  {
+   "year": 2010,
+   "count": 2484
+  },
+  {
+   "year": 2011,
+   "count": 3073
+  },
+  {
+   "year": 2012,
+   "count": 2519
+  },
+  {
+   "year": 2013,
+   "count": 2364
+  },
+  {
+   "year": 2014,
+   "count": 2316
+  },
+  {
+   "year": 2015,
+   "count": 2294
+  },
+  {
+   "year": 2016,
+   "count": 2619
+  },
+  {
+   "year": 2017,
+   "count": 2658
+  },
+  {
+   "year": 2018,
+   "count": 2984
+  },
+  {
+   "year": 2019,
+   "count": 3036
+  },
+  {
+   "year": 2020,
+   "count": 3668
+  },
+  {
+   "year": 2021,
+   "count": 4332
+  },
+  {
+   "year": 2022,
+   "count": 4283
+  },
+  {
+   "year": 2023,
+   "count": 4568
+  },
+  {
+   "year": 2024,
+   "count": 5060
+  }
+ ],
+ "applicants": [
+  {
+   "name": "BAYER AG",
+   "count": 31
+  },
+  {
+   "name": "KYOWA HAKKO KOGYO CO.; LTD.",
+   "count": 21
+  },
+  {
+   "name": "LABORATOIRES HOECHST S.A.",
+   "count": 15
+  },
+  {
+   "name": "CENTRE NATIONAL DE LA RECHERCHE SCIENTIFIQUE",
+   "count": 13
+  },
+  {
+   "name": "CENTRE NATIONAL DE LA RECHERCHE SCIENTIFIQUE (CN",
+   "count": 13
+  },
+  {
+   "name": "SANOFI",
+   "count": 10
+  },
+  {
+   "name": "BEHRINGWERKE Aktiengesellschaft",
+   "count": 8
+  },
+  {
+   "name": "Japan Tobacco Inc.",
+   "count": 6
+  },
+  {
+   "name": "4SC AG",
+   "count": 6
+  },
+  {
+   "name": "INSTITUT PASTEUR",
+   "count": 5
+  },
+  {
+   "name": "THE UNITED STATES OF AMERICA as represented by t",
+   "count": 5
+  },
+  {
+   "name": "SRI INTERNATIONAL",
+   "count": 5
+  }
+ ]
+}

@@ -1,0 +1,98 @@
+# ============================================================================
+# oncopattern/simulation/mutation_cascade.tech — Markov chain over driver
+# mutation states.
+#
+# States 0..S-1 count accumulated driver events (the classic Vogelstein
+# multi-hit picture).  Each generation the population moves forward with
+# probability p(state) and stays otherwise; state S-1 is absorbing
+# (fully transformed).  The chain is propagated as a dense probability
+# vector, so the result is exact rather than sampled.
+#
+# META @module(name:sim_cascade, provides:cascade_run, requires:sim_params)
+# ============================================================================
+
+IMPORT oncopattern/simulation/params
+
+DECL MC_S     : int<64> = 8
+DECL mc_p     : buf<16, float<64>> = null      # current state probabilities
+DECL mc_p2    : buf<16, float<64>> = null
+DECL mc_hist  : buf<512, float<64>> = null     # P(absorbed) per generation
+DECL mc_gens  : int<64> = 0
+
+FUNC cascade_init() {
+    DECL i : int<64> = 0
+    WHILE i < MC_S {
+        mc_p[i] = 0.0
+        i = i + 1
+    }
+    mc_p[0] = 1.0
+}
+
+# One generation.  Transition probability rises with the number of hits
+# already acquired (genomic instability feeds back on itself).
+FUNC cascade_step() {
+    DECL base : float<64> = p_mut_p[g_ct]
+    DECL i : int<64> = 0
+    WHILE i < MC_S {
+        mc_p2[i] = 0.0
+        i = i + 1
+    }
+    i = 0
+    WHILE i < MC_S {
+        DECL adv : float<64> = base * (1.0 + 0.35 * i)
+        IF adv > 0.95 {
+            adv = 0.95
+        }
+        IF i == MC_S - 1 {
+            adv = 0.0
+        }
+        mc_p2[i] = mc_p2[i] + mc_p[i] * (1.0 - adv)
+        IF i + 1 < MC_S {
+            mc_p2[i + 1] = mc_p2[i + 1] + mc_p[i] * adv
+        }
+        i = i + 1
+    }
+    i = 0
+    WHILE i < MC_S {
+        mc_p[i] = mc_p2[i]
+        i = i + 1
+    }
+}
+
+# Returns P(fully transformed) after `gens` generations.
+FUNC cascade_run(gens : int<64>) : float<64> {
+    cascade_init()
+    IF gens > 512 {
+        gens = 512
+    }
+    mc_gens = gens
+    DECL g : int<64> = 0
+    WHILE g < gens {
+        cascade_step()
+        mc_hist[g] = mc_p[MC_S - 1]
+        g = g + 1
+    }
+    RETURN mc_p[MC_S - 1]
+}
+
+# total probability mass — must stay 1.0 (the conservation certificate)
+FUNC cascade_mass() : float<64> {
+    DECL s : float<64> = 0.0
+    DECL i : int<64> = 0
+    WHILE i < MC_S {
+        s = s + mc_p[i]
+        i = i + 1
+    }
+    RETURN s
+}
+
+# expected number of driver hits
+FUNC cascade_expected_hits() : float<64> {
+    DECL s : float<64> = 0.0
+    DECL i : int<64> = 0
+    WHILE i < MC_S {
+        s = s + i * mc_p[i]
+        i = i + 1
+    }
+    RETURN s
+}

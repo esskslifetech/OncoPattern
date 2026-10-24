@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: TECH toolchain
+    url: https://github.com/esskslifetech/TECH/issues
+    about: Compiler, VM or standard-library behaviour belongs upstream, in TECH.
+  - name: How the platform works
+    url: https://github.com/esskslifetech/OncoPattern#readme
+    about: Start with the README — including its notes on toolchain behaviour.

@@ -1,0 +1,75 @@
+name: Defect report
+description: Something computed the wrong value, crashed, or disagreed with its certificate.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The toolchain's failure modes are quiet — a rejected construct can
+        compile to a 0-byte object and run as nothing. Before filing, please
+        read the *Notes on the toolchain* section of the README.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: The value you got, and the value you expected.
+      placeholder: "test_pattern reports 23 patterns; the registry declares 24."
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce
+      description: The exact commands, and the fixture they run against.
+      render: shell
+      placeholder: |
+        tools/ocbuild run test/test_pattern.tech
+        tail -20 results/test_pattern.txt
+    validations:
+      required: true
+
+  - type: textarea
+    id: output
+    attributes:
+      label: Output
+      description: Relevant lines from `results/`, or the failing assertion.
+      render: text
+    validations:
+      required: true
+
+  - type: dropdown
+    id: layer
+    attributes:
+      label: Which layer
+      description: Where the defect appears to live.
+      options:
+        - data / ingest
+        - pattern / detect
+        - simulation
+        - visualization / export
+        - report / compare
+        - gui
+        - persistence / fs
+        - toolchain (TECH itself)
+        - build scripts
+        - not sure
+    validations:
+      required: true
+
+  - type: input
+    id: tech-version
+    attributes:
+      label: TECH checkout
+      description: SHA of the TECH repository you built against (`git -C ../TECH rev-parse --short HEAD`).
+      placeholder: "d86b878"
+
+  - type: checkboxes
+    id: confirm
+    attributes:
+      label: Confirmation
+      options:
+        - label: "`tools/runtests` passes on a clean checkout of this repository."
+        - label: This is not a request for clinical guidance; I understand the platform is not a medical device.
+          required: true

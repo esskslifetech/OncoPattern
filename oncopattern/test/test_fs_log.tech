@@ -1,0 +1,101 @@
+# ============================================================================
+# test_fs_log.tech — crash-consistent pattern logging (plan §4.4, §10.3).
+#
+# Exercises the journaling filesystem the way a power failure would: write a
+# record, cut power before the commit (rollback expected) and after the commit
+# (redo expected), then remount and check what survived.
+# ============================================================================
+
+IMPORT oncopattern/test/harness
+IMPORT oncopattern/pattern/log
+IMPORT oncopattern/pattern/detect
+IMPORT oncopattern/data/ingest_vcf
+
+t_begin(strbuf("ONCOPATTERN — JOURNALLED LOGGING CERTIFICATE"))
+
+vcf_load(strbuf("ocdata/variants_P001_t0.vcf"))
+expr_load(strbuf("ocdata/expression.csv"))
+img_load(strbuf("ocdata/histology.pgm"))
+pat_reset()
+detect_all()
+classify_all()
+
+# ---- text journal
+log_reset(7)
+t_eqi(strbuf("journal: reset clears the record count"), g_log_n, 0)
+t_true(strbuf("journal: header written"), oc_gt0(g_log_len))
+DECL n : int<64> = log_patterns()
+t_eqi(strbuf("journal: one record per detection"), n, g_pat_n)
+t_true(strbuf("journal: every record hashed"), oc_has(slice(g_log, 0, g_log_len), strbuf("genomic")))
+t_true(strbuf("journal: grades recorded"), oc_has(slice(g_log, 0, g_log_len), strbuf("critical")))
+t_true(strbuf("journal: saved to disk"), oc_gt0(log_save(strbuf("ocout/_journal_test.txt"))))
+
+# ---- filesystem: create, read back, count
+log_fs_format(strbuf("ocout/_test.tfs"))
+DECL before : int<64> = fs_count()
+t_eqi(strbuf("fs: fresh volume is empty"), before, 0)
+log_pattern(PAT_TMB_HIGH)
+t_eqi(strbuf("fs: record committed"), fs_count(), before + 1)
+DECL out : buf<> = strbuf("")
+DECL rn : int<64> = log_fs_read(PAT_TMB_HIGH, out)
+t_true(strbuf("fs: record reads back"), oc_gt0(rn))
+t_true(strbuf("fs: record carries the score"), oc_has(slice(out, 0, rn), strbuf("20.0000")))
+t_true(strbuf("fs: record carries the grade"), oc_has(slice(out, 0, rn), strbuf("|4|")))
+t_true(strbuf("fs: record fits one 64-byte block"), oc_gt0(65 - rn))
+
+# ---- persistence across unmount / remount
+fs_unmount()
+t_eqi(strbuf("fs: unmount clears the mount flag"), fs_mounted, 0)
+log_fs_open(strbuf("ocout/_test.tfs"))
+DECL out2 : buf<> = strbuf("")
+DECL rn2 : int<64> = log_fs_read(PAT_TMB_HIGH, out2)
+t_eqi(strbuf("fs: record survives a remount"), rn2, rn)
+t_true(strbuf("fs: contents identical after remount"), oc_same(slice(out, 0, rn), slice(out2, 0, rn2)))
+
+# ---- crash consistency
+# Seed a committed baseline record, then attempt to overwrite it with new
+# content while cutting power at each stage of the write-ahead sequence.
+log_crash_write(PAT_MSI_SHIFT, strbuf("BASELINE-CONTENT"), 9)
+fs_unmount()
+log_fs_open(strbuf("ocout/_test.tfs"))
+DECL base : buf<> = strbuf("")
+DECL bn : int<64> = log_fs_read(PAT_MSI_SHIFT, base)
+t_true(strbuf("crash drill: baseline committed"), oc_has(slice(base, 0, bn), strbuf("BASELINE")))
+
+# stage 1: power lost after the journal append, before the commit -> rollback
+log_crash_write(PAT_MSI_SHIFT, strbuf("TORN-WRITE-XXXX"), 1)
+fs_unmount()
+log_fs_open(strbuf("ocout/_test.tfs"))
+DECL r1 : buf<> = strbuf("")
+DECL n1 : int<64> = log_fs_read(PAT_MSI_SHIFT, r1)
+t_true(strbuf("crash before commit: rolled back"), oc_has(slice(r1, 0, n1), strbuf("BASELINE")))
+t_eqi(strbuf("crash before commit: torn data discarded"), oc_has(slice(r1, 0, n1), strbuf("TORN")), 0)
+
+# stage 2: power lost after the commit, before the checkpoint -> redo
+log_crash_write(PAT_MSI_SHIFT, strbuf("COMMITTED-NEW"), 2)
+fs_unmount()
+log_fs_open(strbuf("ocout/_test.tfs"))
+DECL r2 : buf<> = strbuf("")
+DECL n2 : int<64> = log_fs_read(PAT_MSI_SHIFT, r2)
+t_true(strbuf("crash after commit: redone on mount"), oc_has(slice(r2, 0, n2), strbuf("COMMITTED-NEW")))
+t_eqi(strbuf("crash after commit: old data replaced"), oc_has(slice(r2, 0, n2), strbuf("BASELINE")), 0)
+
+# ---- the earlier record is untouched by the recovery
+DECL out4 : buf<> = strbuf("")
+DECL rn4 : int<64> = log_fs_read(PAT_TMB_HIGH, out4)
+t_true(strbuf("recovery: unrelated records preserved"), oc_same(slice(out, 0, rn), slice(out4, 0, rn4)))
+
+# ---- capacity: the v1 volume holds 15 files and refuses the 16th
+DECL created : int<64> = 0
+DECL i : int<64> = 0
+WHILE i < OC_NPAT {
+    IF g_pat_detected[i] == 1 {
+        created = created + log_pattern(i)
+    }
+    i = i + 1
+}
+t_true(strbuf("fs: capacity limit enforced, no corruption"), oc_gt0(fs_count()))
+t_true(strbuf("fs: at most 15 files stored"), oc_gt0(16 - fs_count()))
+fs_unmount()
+
+YIELD t_end(strbuf("ocout/test_fs_log.txt"))

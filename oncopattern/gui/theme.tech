@@ -1,0 +1,101 @@
+# ============================================================================
+# oncopattern/gui/theme.tech — colour palette, spacing and font metrics.
+#
+# One place for every design token, so the whole interface restyles from this
+# file.  Colours are stored as separate r/g/b globals (the renderer takes
+# components, and packing/unpacking would cost more than it saves).
+#
+# META @module(name:gui_theme, provides:theme, requires:vis_renderer)
+# ============================================================================
+
+IMPORT oncopattern/visualization/renderer
+
+# ------------------------------------------------------------- palette ----
+DECL TH_BG_R : int<64> = 16
+DECL TH_BG_G : int<64> = 19
+DECL TH_BG_B : int<64> = 26
+
+DECL TH_PANEL_R : int<64> = 24
+DECL TH_PANEL_G : int<64> = 29
+DECL TH_PANEL_B : int<64> = 39
+
+DECL TH_BAR_R : int<64> = 32
+DECL TH_BAR_G : int<64> = 39
+DECL TH_BAR_B : int<64> = 53
+
+DECL TH_EDGE_R : int<64> = 58
+DECL TH_EDGE_G : int<64> = 68
+DECL TH_EDGE_B : int<64> = 88
+
+DECL TH_TEXT_R : int<64> = 226
+DECL TH_TEXT_G : int<64> = 232
+DECL TH_TEXT_B : int<64> = 244
+
+DECL TH_DIM_R : int<64> = 142
+DECL TH_DIM_G : int<64> = 152
+DECL TH_DIM_B : int<64> = 172
+
+DECL TH_ACC_R : int<64> = 90
+DECL TH_ACC_G : int<64> = 200
+DECL TH_ACC_B : int<64> = 250
+
+DECL TH_WARN_R : int<64> = 255
+DECL TH_WARN_G : int<64> = 176
+DECL TH_WARN_B : int<64> = 62
+
+DECL TH_CRIT_R : int<64> = 255
+DECL TH_CRIT_G : int<64> = 92
+DECL TH_CRIT_B : int<64> = 110
+
+DECL TH_OK_R : int<64> = 96
+DECL TH_OK_G : int<64> = 214
+DECL TH_OK_B : int<64> = 140
+
+# ------------------------------------------------------------- spacing ----
+DECL TH_MENUH   : int<64> = 22       # menu bar height
+DECL TH_STATUSH : int<64> = 20       # status bar height
+DECL TH_SIDEW   : int<64> = 176      # side panel width
+DECL TH_PAD     : int<64> = 8
+DECL TH_ROWH    : int<64> = 16
+DECL TH_TABH    : int<64> = 20
+
+# grade colour: writes into the ramp_* globals so callers can reuse them
+FUNC theme_grade_color(grade : int<64>) {
+    IF grade >= 4 {
+        ramp_r = TH_CRIT_R
+        ramp_g = TH_CRIT_G
+        ramp_b = TH_CRIT_B
+        RETURN 0
+    }
+    IF grade == 3 {
+        ramp_r = TH_WARN_R
+        ramp_g = TH_WARN_G
+        ramp_b = TH_WARN_B
+        RETURN 0
+    }
+    IF grade == 2 {
+        ramp_r = 232
+        ramp_g = 220
+        ramp_b = 120
+        RETURN 0
+    }
+    IF grade == 1 {
+        ramp_r = TH_OK_R
+        ramp_g = TH_OK_G
+        ramp_b = TH_OK_B
+        RETURN 0
+    }
+    ramp_r = TH_DIM_R
+    ramp_g = TH_DIM_G
+    ramp_b = TH_DIM_B
+    RETURN 0
+}
+
+FUNC theme_panel(x : int<64>, y : int<64>, w : int<64>, h : int<64>, title : buf<>) {
+    fb_rect(x, y, w, h, TH_PANEL_R, TH_PANEL_G, TH_PANEL_B)
+    fb_frame(x, y, w, h, TH_EDGE_R, TH_EDGE_G, TH_EDGE_B)
+    IF len(title) > 0 {
+        fb_rect(x + 1, y + 1, w - 2, 14, TH_BAR_R, TH_BAR_G, TH_BAR_B)
+        fb_text(x + 6, y + 5, title, 1, TH_TEXT_R, TH_TEXT_G, TH_TEXT_B)
+    }
+}

@@ -1,0 +1,107 @@
+# ============================================================================
+# oncopattern/test/test_ingest.tech — P1 certificate: data ingestion.
+#
+# Certificates (ground truth fixed by tools/gen_datasets.py):
+#   VCF   : 1000 variants accepted, exactly 3 quarantined with the right codes
+#   CSV   : 6 clinical rows x 7 columns, round-trip of a text and a numeric cell
+#   EXPR  : 40 genes x 12 samples, 8 up-regulated genes with logFC > 3.5
+#   JSON  : 7 organ nodes, 10 edges
+#   IMAGE : 96x96 pixels, necrosis/tumour/nucleus populations present
+# ============================================================================
+
+IMPORT oncopattern/data/ingest_csv
+IMPORT oncopattern/data/ingest_vcf
+IMPORT oncopattern/data/ingest_json
+IMPORT oncopattern/data/ingest_image
+IMPORT oncopattern/data/validate
+
+DECL t_pass : int<64> = 0
+DECL t_fail : int<64> = 0
+DECL rep : buf<16384> = null
+DECL rn : int<64> = 0
+
+FUNC check(name : buf<>, got : int<64>, want : int<64>) {
+    DECL s : int<64> = rn
+    IF got == want {
+        t_pass = t_pass + 1
+        rn = oc_cat(rep, rn, strbuf("  PASS  "))
+    } ELSE {
+        t_fail = t_fail + 1
+        rn = oc_cat(rep, rn, strbuf("  FAIL  "))
+    }
+    rn = oc_cat(rep, rn, name)
+    rn = oc_pad(rep, rn, s, 46)
+    rn = oc_cat(rep, rn, strbuf("got "))
+    rn = oc_cati(rep, rn, got)
+    rn = oc_cat(rep, rn, strbuf("  want "))
+    rn = oc_cati(rep, rn, want)
+    rn = oc_nl(rep, rn)
+}
+
+rn = oc_cat(rep, rn, strbuf("=== test_ingest.tech — P1 data ingestion ===\n"))
+
+# ------------------------------------------------------------------ VCF
+DECL nv : int<64> = vcf_load(strbuf("ocdata/variants_P001_t0.vcf"))
+check(strbuf("VCF variants accepted"), nv, 1000)
+check(strbuf("VCF rows quarantined"), g_quar_n, 3)
+check(strbuf("quarantine[0] = chrom/pos code"), g_quar_reason[0], OC_Q_POS)
+check(strbuf("quarantine[1] = quality code"), g_quar_reason[1], OC_Q_QUAL)
+check(strbuf("quarantine[2] = chromosome code"), g_quar_reason[2], OC_Q_CHROM)
+check(strbuf("chr7 hotspot variants present"), vcf_count_chrom(7) > 120, 1)
+check(strbuf("all accepted quals >= 20"), vcf_mean_qual() > 20.0, 1)
+check(strbuf("Ti/Tv ratio in biological range"), vcf_ti_tv() > 0.2, 1)
+
+# ------------------------------------------------------------- clinical CSV
+DECL nr : int<64> = csv_load(strbuf("ocdata/clinical.csv"))
+check(strbuf("CSV rows (header + 6)"), nr, 7)
+check(strbuf("CSV columns"), g_csv_cols, 7)
+check(strbuf("cell text round-trip P001"), oc_eq(g_csv_src, g_csv_off[7], g_csv_off[7] + g_csv_len[7], strbuf("P001")), 1)
+check(strbuf("cell numeric round-trip age=64"), (oc_cell_num(1, 3) //// 1), 64)
+check(strbuf("numeric flag on volume column"), g_csv_isnum[oc_cell(1, 4)], 1)
+check(strbuf("text flag on cancer_type column"), g_csv_isnum[oc_cell(1, 1)], 0)
+
+# ------------------------------------------------------------- expression
+DECL ng : int<64> = expr_load(strbuf("ocdata/expression.csv"))
+check(strbuf("expression genes"), ng, 40)
+check(strbuf("expression samples"), g_expr_s, 12)
+check(strbuf("EGFR up-regulated in tumour"), expr_log_fc(0, 0, 6, 6, 12) > 3.5, 1)
+check(strbuf("MKI67 up-regulated in tumour"), expr_log_fc(5, 0, 6, 6, 12) > 3.5, 1)
+check(strbuf("PTEN not up-regulated"), expr_log_fc(8, 0, 6, 6, 12) < 1.0, 1)
+check(strbuf("CD8A immune signature down"), expr_log_fc(31, 0, 6, 6, 12) < 0.0, 1)
+
+# -------------------------------------------------------------- graph JSON
+DECL nn : int<64> = json_graph_load(strbuf("ocdata/pathway.json"))
+check(strbuf("organ graph nodes"), nn, 7)
+check(strbuf("organ graph edges"), g_edge_n, 10)
+check(strbuf("node 0 is the lung primary"), oc_eq(g_json_src, g_node_off[0], g_node_off[0] + g_node_len[0], strbuf("lung")), 1)
+check(strbuf("lymph node degree"), json_degree(1), 5)
+
+# ------------------------------------------------------------------ image
+DECL npx : int<64> = img_load(strbuf("ocdata/histology.pgm"))
+check(strbuf("image pixels loaded"), npx, 9216)
+check(strbuf("image width"), g_img_w, 96)
+check(strbuf("image height"), g_img_h, 96)
+check(strbuf("necrosis population present"), img_frac_in(0, OC_NECROSIS_MAX) > 0.02, 1)
+check(strbuf("nucleus population present"), img_frac_in(OC_NUCLEUS_MIN, 255) > 0.02, 1)
+check(strbuf("mean grey in expected band"), img_mean() > 60.0, 1)
+
+# ------------------------------------------------------------- validation
+DECL verr : int<64> = validate_all()
+check(strbuf("semantic validation clean"), verr, 0)
+
+rn = oc_nl(rep, rn)
+rn = validate_render(rep, rn)
+rn = oc_nl(rep, rn)
+# summary in the shared certificate format (see test/harness.tech)
+rn = oc_rep(rep, rn, 61, 74)
+rn = oc_nl(rep, rn)
+rn = oc_cat(rep, rn, strbuf("TOTAL "))
+rn = oc_cati(rep, rn, t_pass + t_fail)
+rn = oc_cat(rep, rn, strbuf("   PASS "))
+rn = oc_cati(rep, rn, t_pass)
+rn = oc_cat(rep, rn, strbuf("   FAIL "))
+rn = oc_cati(rep, rn, t_fail)
+rn = oc_nl(rep, rn)
+
+save("ocout/test_ingest.txt", slice(rep, 0, rn))
+YIELD t_fail

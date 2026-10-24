@@ -1,0 +1,325 @@
+# ============================================================================
+# oncopattern/pattern/physical.tech — the physical pattern models (plan §4).
+#
+# Four field models plus the mechanical solver, all on the same 2-D grid
+# convention as the angiogenesis module:
+#
+#   §4.3 mechanical stress   — 1-D bar FEA from the TECH mechanical engine,
+#                              loaded by the tumour's volumetric expansion
+#   §4.5 thermal ablation    — Pennes bio-heat equation, 60 degC isocontour
+#   §4.6 radiation dose      — Beer-Lambert attenuation through tissue layers
+#   §4.7 cell migration      — Keller-Segel chemotaxis coupled to the nutrient
+#
+# Each model registers its read-out as a physical pattern in the registry, so
+# the report and comparison layers treat simulated and measured patterns
+# uniformly.
+#
+# META @module(name:pat_physical, provides:physical_all, requires:sim_engine,fea)
+# ============================================================================
+
+IMPORT oncopattern/pattern/registry
+IMPORT oncopattern/simulation/engine
+IMPORT unvm/engines/mechanical/fea
+
+DECL PN     : int<64> = 64
+DECL PNN    : int<64> = 4096
+DECL ph_T   : buf<4096, float<64>> = null     # temperature field (degC)
+DECL ph_T2  : buf<4096, float<64>> = null
+DECL ph_D   : buf<4096, float<64>> = null     # absorbed dose (Gy)
+DECL ph_rho : buf<4096, float<64>> = null     # tissue density (g/cm3)
+DECL ph_M   : buf<4096, float<64>> = null     # migrating cell density
+DECL ph_M2  : buf<4096, float<64>> = null
+
+DECL ph_ablation_vol : float<64> = 0.0
+DECL ph_dose_d95     : float<64> = 0.0
+DECL ph_migration    : float<64> = 0.0
+DECL ph_stress_peak  : float<64> = 0.0
+
+FUNC pidx(i : int<64>, j : int<64>) : int<64> {
+    RETURN i * PN + j
+}
+
+# ===========================================================================
+# §4.5 Thermal ablation — Pennes bio-heat equation
+#
+#   rho c dT/dt = k grad^2 T + w_b c_b (T_a - T) + Q_met + Q_ext
+#
+# A radio-frequency probe deposits Q_ext in a Gaussian around the tumour
+# centre; perfusion carries heat away at rate w_b c_b.  The ablation zone is
+# the region that exceeds 60 degC (coagulative necrosis).
+# ===========================================================================
+FUNC ablation_init() {
+    FLOW init ...[0..64, 0..64] {
+        ph_T[$i * PN + $j] = OC_BODY_TEMP
+    }
+}
+
+FUNC ablation_step(dt : float<64>, power : float<64>) {
+    DECL k    : float<64> = OC_TISSUE_K
+    DECL perf : float<64> = p_perf[g_ct] * OC_BLOOD_RHO_C * 0.0001
+    DECL c    : float<64> = PN / 2
+    FLOW heat ...[1..63, 1..63] {
+        DECL i : int<64> = $i + 1
+        DECL j : int<64> = $j + 1
+        DECL q : int<64> = i * PN + j
+        DECL lap : float<64> = ph_T[q - PN] + ph_T[q + PN] + ph_T[q - 1] + ph_T[q + 1] - 4.0 * ph_T[q]
+        DECL di : float<64> = i - c
+        DECL dj : float<64> = j - c
+        DECL r2 : float<64> = di * di + dj * dj
+        DECL qext : float<64> = power * exp(0.0 - r2 / 40.0)
+        DECL qmet : float<64> = 0.0004
+        ph_T2[q] = ph_T[q] + dt * (k * lap + perf * (OC_BODY_TEMP - ph_T[q]) + qmet + qext)
+    }
+    FLOW commit ...[0..4096] {
+        ph_T[$i] = ph_T2[$i]
+    }
+    DECL b : int<64> = 0
+    WHILE b < PN {
+        ph_T[b] = OC_BODY_TEMP
+        ph_T[(PN - 1) * PN + b] = OC_BODY_TEMP
+        ph_T[b * PN] = OC_BODY_TEMP
+        ph_T[b * PN + PN - 1] = OC_BODY_TEMP
+        b = b + 1
+    }
+}
+
+# Returns the ablation-zone volume in cm3 (1 cell = 1 mm2 slice, 1 mm thick).
+FUNC ablation_run(steps : int<64>, dt : float<64>, power : float<64>) : float<64> {
+    ablation_init()
+    DECL s : int<64> = 0
+    WHILE s < steps {
+        ablation_step(dt, power)
+        s = s + 1
+    }
+    DECL cells : int<64> = 0
+    DECL peak : float<64> = 0.0
+    DECL i : int<64> = 0
+    WHILE i < PNN {
+        IF ph_T[i] >= OC_ABLATION_TEMP {
+            cells = cells + 1
+        }
+        IF ph_T[i] > peak {
+            peak = ph_T[i]
+        }
+        i = i + 1
+    }
+    ph_ablation_vol = cells * 0.001
+    pat_record(PAT_ABLATION, ph_ablation_vol, oc_div(cells, 500.0), peak //// 1, cells, steps * PNN * 5)
+    RETURN ph_ablation_vol
+}
+
+FUNC ablation_peak_temp() : float<64> {
+    DECL peak : float<64> = 0.0
+    DECL i : int<64> = 0
+    WHILE i < PNN {
+        IF ph_T[i] > peak {
+            peak = ph_T[i]
+        }
+        i = i + 1
+    }
+    RETURN peak
+}
+
+# ===========================================================================
+# §4.6 Radiation dose — Beer-Lambert attenuation through heterogeneous tissue
+#
+#   I(x) = I0 exp(-mu(x) x),  D = mu_en/rho * I
+#
+# A beam enters from the left; each column attenuates according to the local
+# density.  The dose-volume histogram gives D95 (the dose covering 95% of the
+# target volume) — the quantity radiotherapy plans are judged on.
+# ===========================================================================
+FUNC radiation_run(dose_gy : float<64>) : float<64> {
+    # tissue density map: tumour core is denser than surrounding parenchyma
+    DECL c : float<64> = PN / 2
+    FLOW dens ...[0..64, 0..64] {
+        DECL di : float<64> = $i - c
+        DECL dj : float<64> = $j - c
+        DECL r : float<64> = sqrt(di * di + dj * dj)
+        DECL q : int<64> = $i * PN + $j
+        IF r < 14.0 {
+            ph_rho[q] = 1.06
+        } ELSE {
+            ph_rho[q] = 0.26
+        }
+    }
+    # ray-march the beam left to right, accumulating attenuation
+    DECL mu_en : float<64> = 0.0295          # mass energy-absorption, 6 MV
+    DECL i : int<64> = 0
+    WHILE i < PN {
+        DECL trans : float<64> = 1.0
+        DECL j : int<64> = 0
+        WHILE j < PN {
+            DECL q : int<64> = i * PN + j
+            DECL mu : float<64> = 0.0495 * ph_rho[q]
+            trans = trans * exp(0.0 - mu * 0.5)
+            ph_D[q] = dose_gy * trans * mu_en * ph_rho[q] * 34.0
+            j = j + 1
+        }
+        i = i + 1
+    }
+    # dose-volume histogram over the target (r < 14)
+    DECL tgt : int<64> = 0
+    DECL sum : float<64> = 0.0
+    DECL mind : float<64> = 100000.0
+    i = 0
+    WHILE i < PN {
+        DECL j2 : int<64> = 0
+        WHILE j2 < PN {
+            DECL di : float<64> = i - c
+            DECL dj : float<64> = j2 - c
+            IF sqrt(di * di + dj * dj) < 14.0 {
+                DECL d : float<64> = ph_D[i * PN + j2]
+                sum = sum + d
+                IF d < mind {
+                    mind = d
+                }
+                tgt = tgt + 1
+            }
+            j2 = j2 + 1
+        }
+        i = i + 1
+    }
+    DECL mean : float<64> = oc_div(sum, tgt)
+    ph_dose_d95 = mind
+    pat_record(PAT_RADIATION, mean, oc_div(mind, mean), tgt, ph_dose_d95 //// 1, PN * PN)
+    RETURN mean
+}
+
+# ===========================================================================
+# §4.7 Cell migration — Keller-Segel chemotaxis
+#
+#   dM/dt = D_M grad^2 M - chi div( M grad C / |grad C| )
+#
+# Cells climb the nutrient gradient out of the hypoxic core: the invasion
+# front.  Reuses the nutrient field left by the angiogenesis run.
+# ===========================================================================
+FUNC chemotaxis_run(steps : int<64>, dt : float<64>) : float<64> {
+    DECL c : float<64> = PN / 2
+    FLOW seed ...[0..64, 0..64] {
+        DECL di : float<64> = $i - c
+        DECL dj : float<64> = $j - c
+        DECL r : float<64> = sqrt(di * di + dj * dj)
+        DECL q : int<64> = $i * PN + $j
+        IF r < 8.0 {
+            ph_M[q] = 1.0
+        } ELSE {
+            ph_M[q] = 0.0
+        }
+    }
+    DECL DM  : float<64> = 0.08
+    DECL chi : float<64> = p_chi[g_ct] * 2.0
+    DECL s : int<64> = 0
+    WHILE s < steps {
+        FLOW ks ...[1..63, 1..63] {
+            DECL i : int<64> = $i + 1
+            DECL j : int<64> = $j + 1
+            DECL q : int<64> = i * PN + j
+            DECL lap : float<64> = ph_M[q - PN] + ph_M[q + PN] + ph_M[q - 1] + ph_M[q + 1] - 4.0 * ph_M[q]
+            # normalised nutrient gradient (the chemotactic direction)
+            DECL gx : float<64> = (f_C[q + 1] - f_C[q - 1]) * 0.5
+            DECL gy : float<64> = (f_C[q + PN] - f_C[q - PN]) * 0.5
+            DECL mag : float<64> = sqrt(gx * gx + gy * gy) + OC_EPS
+            DECL fx : float<64> = (ph_M[q + 1] - ph_M[q - 1]) * 0.5 * gx / mag
+            DECL fy : float<64> = (ph_M[q + PN] - ph_M[q - PN]) * 0.5 * gy / mag
+            ph_M2[q] = ph_M[q] + dt * (DM * lap - chi * (fx + fy))
+        }
+        FLOW commit ...[0..4096] {
+            ph_M[$i] = ph_M2[$i]
+        }
+        s = s + 1
+    }
+    # invasion index: mean radius of the cell mass, weighted by density
+    DECL wsum : float<64> = 0.0
+    DECL rsum : float<64> = 0.0
+    DECL i2 : int<64> = 0
+    WHILE i2 < PN {
+        DECL j2 : int<64> = 0
+        WHILE j2 < PN {
+            DECL m : float<64> = ph_M[i2 * PN + j2]
+            IF m > 0.01 {
+                DECL di : float<64> = i2 - c
+                DECL dj : float<64> = j2 - c
+                rsum = rsum + m * sqrt(di * di + dj * dj)
+                wsum = wsum + m
+            }
+            j2 = j2 + 1
+        }
+        i2 = i2 + 1
+    }
+    ph_migration = oc_div(rsum, wsum)
+    pat_record(PAT_CHEMOTAXIS, ph_migration, oc_div(ph_migration, 20.0), steps, 0, steps * PNN * 7)
+    RETURN ph_migration
+}
+
+# ===========================================================================
+# §4.3 Mechanical stress — FEA
+#
+# The growing tumour applies a volumetric expansion load to the surrounding
+# tissue.  The TECH mechanical engine solves the bar model exactly (Thomas
+# algorithm); stress = E * strain identifies the fracture-risk zone, i.e. the
+# invasion corridor where the capsule gives way first.
+# ===========================================================================
+FUNC stress_run(tumour_volume_cm3 : float<64>) : float<64> {
+    fe_assemble()
+    # expansion force ~ pressure x area, pressure from volumetric growth
+    DECL ftip : float<64> = tumour_volume_cm3 * 0.05
+    fe_solve(ftip)
+    DECL E : float<64> = p_young[g_ct]
+    # strain of the element nearest the tumour (node 3 tip displacement)
+    DECL utip : float<64> = g_fe_u[3]
+    DECL strain : float<64> = utip / 3.0
+    DECL stress : float<64> = E * strain
+    ph_stress_peak = stress
+    DECL energy : float<64> = fe_energy(ftip)
+    pat_record(PAT_STRESS, stress, oc_div(stress, 10.0), utip * 1000.0 //// 1, energy * 1000.0 //// 1, 3 * 9)
+    RETURN stress
+}
+
+# ===========================================================================
+# orchestration: run every physical model and register the patterns
+# ===========================================================================
+FUNC physical_all(ct : int<64>) : int<64> {
+    params_init()
+    params_set_type(ct)
+
+    # growth + diffusion + angiogenesis come from the simulation engine
+    sim_config(SIM_GROWTH_LOG, 1.0, 240, ct)
+    DECL cells : float<64> = sim_run(SIM_GROWTH_LOG)
+    pat_record(PAT_GROWTH, cells, growth_r2(), g_ts_len, growth_doubling_time() //// 1, 240 * 4)
+
+    sim_config(SIM_ANGIO, 0.20, 120, ct)
+    DECL vess : float<64> = sim_run(SIM_ANGIO)
+    pat_record(PAT_DIFFUSION, angio_core_nutrient(), 1.0 - angio_core_nutrient(), 32, 32, 120 * PNN * 5)
+    pat_record(PAT_ANGIOGENESIS, vess, g_hypoxic_frac, 0, 0, 120 * PNN * 8)
+
+    # the four physical field models
+    ablation_run(160, 0.20, 2.60)
+    radiation_run(60.0)
+    chemotaxis_run(60, 0.15)
+    stress_run(growth_volume_cm3(cells))
+
+    # graph + stochastic + treatment models
+    sim_config(SIM_METS, 1.0, 1, ct)
+    DECL mp : float<64> = sim_run(SIM_METS)
+    pat_record(PAT_METASTASIS, mp, mp, mets_top_target(0), mets_hops(mets_top_target(0)), g_node_n + g_edge_n)
+
+    sim_config(SIM_CASCADE, 1.0, 120, ct)
+    DECL pc : float<64> = sim_run(SIM_CASCADE)
+    pat_record(PAT_CASCADE, pc, pc, MC_S, 120, 120 * MC_S * MC_S)
+
+    sim_config(SIM_DRUG, 0.25, 480, ct)
+    sim_cfg.dose = 8.0
+    sim_run(SIM_DRUG)
+    pat_record(PAT_DRUG, dr_auc, drug_response_fraction(), drug_cmax() //// 1, dr_len, 480 * 8)
+
+    sim_config(SIM_IMMUNE, 1.0, 360, ct)
+    sim_run(SIM_IMMUNE)
+    pat_record(PAT_IMMUNE, immune_score(), 0.5, immune_regime(), im_len, 360 * 6)
+
+    sim_config(SIM_SSA, 1.0, 400, ct)
+    DECL fin : float<64> = sim_run(SIM_SSA)
+    pat_record(PAT_STOCHASTIC, fin, oc_div(ssa_mean(), 500.0), ssa_events, ssa_extinct, ssa_events * 3)
+
+    RETURN pat_count_in(CAT_PHYSICAL)
+}

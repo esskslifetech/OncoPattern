@@ -1,0 +1,226 @@
+# ============================================================================
+# oncopattern/core/app_main.tech — entry point and boot sequence.
+#
+# The pipeline, in the order the plan specifies:
+#
+#   ingest -> validate -> detect -> classify -> simulate -> visualise
+#          -> log -> report -> compare -> export
+#
+# app_run() executes it headlessly (P1-P6, P8); app_gui() adds the interactive
+# layer (P7) by composing frames and replaying a scripted event sequence, so
+# the same code path is exercised with or without a screen.
+#
+# META @module(name:app_main, provides:app_run, requires:everything)
+# ============================================================================
+
+IMPORT oncopattern/core/session
+IMPORT oncopattern/gui/window
+IMPORT oncopattern/visualization/export_svg
+IMPORT oncopattern/report/generator
+IMPORT oncopattern/data/ingest_vcf
+IMPORT oncopattern/data/ingest_json
+IMPORT oncopattern/data/validate
+IMPORT oncopattern/pattern/novel
+
+DECL app_stage    : int<64> = 0
+DECL app_errors   : int<64> = 0
+DECL app_t0       : int<64> = 0
+DECL app_stage_ms : buf<16, int<64>> = null
+DECL app_risk     : float<64> = 0.0
+
+FUNC app_mark(stage : int<64>) {
+    app_stage_ms[stage] = sys_ms() - app_t0
+    app_stage = stage
+}
+
+FUNC app_stage_name(s : int<64>) : buf<> {
+    MATCH s {
+        CASE 0 {
+            RETURN strbuf("ingest")
+        }
+        CASE 1 {
+            RETURN strbuf("validate")
+        }
+        CASE 2 {
+            RETURN strbuf("detect")
+        }
+        CASE 3 {
+            RETURN strbuf("classify")
+        }
+        CASE 4 {
+            RETURN strbuf("simulate")
+        }
+        CASE 5 {
+            RETURN strbuf("scan")
+        }
+        CASE 6 {
+            RETURN strbuf("log")
+        }
+        CASE 7 {
+            RETURN strbuf("report")
+        }
+        ELSE {
+            RETURN strbuf("export")
+        }
+    }
+}
+
+# ---------------------------------------------------------------------------
+# stage 1: ingest every dataset for one patient/timepoint
+# ---------------------------------------------------------------------------
+# Returns the variant count, or -1 when any expected input was unreadable.
+# A missing file is a hard condition worth reporting: silently analysing an
+# empty dataset produces a confident-looking report about nothing.
+FUNC app_ingest(vcf_path : buf<>) : int<64> {
+    g_missing = 0
+    csv_load(strbuf("ocdata/clinical.csv"))
+    IF g_csv_rows == 0 {
+        g_missing = g_missing + 1
+    }
+    g_clin_rows = g_csv_rows - 1
+    # snapshot row 1 before any other CSV replaces the parser state
+    g_pid_n = 0
+    g_pid_n = oc_cat(g_pid, g_pid_n, oc_cell_txt(1, 0))
+    DECL k : int<64> = g_csv_cols + 1
+    g_pct = ct_from_text(g_csv_src, g_csv_off[k], g_csv_off[k] + g_csv_len[k])
+    g_pstage = oc_cell_num(1, 2) //// 1
+    g_page = oc_cell_num(1, 3) //// 1
+    DECL nv : int<64> = vcf_load(vcf_path)
+    IF nv == 0 {
+        g_missing = g_missing + 1
+    }
+    IF expr_load(strbuf("ocdata/expression.csv")) == 0 {
+        g_missing = g_missing + 1
+    }
+    IF json_graph_load(strbuf("ocdata/pathway.json")) == 0 {
+        g_missing = g_missing + 1
+    }
+    IF img_load(strbuf("ocdata/histology.pgm")) == 0 {
+        g_missing = g_missing + 1
+    }
+    IF patents_load(strbuf("ocdata/patents.json")) == 0 {
+        g_missing = g_missing + 1
+    }
+    IF papers_load(strbuf("ocdata/papers.json")) == 0 {
+        g_missing = g_missing + 1
+    }
+    IF g_missing > 0 {
+        RETURN -1
+    }
+    RETURN nv
+}
+
+FUNC app_inputs_ok() : int<64> {
+    IF g_missing > 0 {
+        RETURN 0
+    }
+    RETURN 1
+}
+
+# ---------------------------------------------------------------------------
+# the headless pipeline
+# ---------------------------------------------------------------------------
+FUNC app_run(vcf_path : buf<>, ct : int<64>, snapshot_slot : int<64>) : int<64> {
+    app_t0 = sys_ms()
+    app_errors = 0
+
+    app_ingest(vcf_path)
+    app_mark(0)
+
+    app_errors = app_errors + validate_all()
+    app_mark(1)
+
+    pat_reset()
+    detect_all()
+    app_mark(2)
+
+    classify_all()
+    app_risk = classify_risk_index()
+    app_mark(3)
+
+    physical_all(ct)
+    classify_all()
+    app_risk = classify_risk_index()
+    app_mark(4)
+
+    # exhaustive sweep of every available signal, then the invented composites
+    scan_all()
+    novel_all()
+    app_mark(5)
+
+    log_reset(sess_id)
+    log_fs_open(strbuf("ocout/patterns.tfs"))
+    log_patterns()
+    log_save(strbuf("ocout/pattern_journal.txt"))
+    fs_unmount()
+    app_mark(6)
+
+    pat_snapshot(snapshot_slot)
+    sess_commit()
+    RETURN g_pat_n
+}
+
+# ---------------------------------------------------------------------------
+# the interactive layer: build the UI, replay a scripted session, emit frames
+# ---------------------------------------------------------------------------
+FUNC app_gui(frames_out : int<64>) : int<64> {
+    win_build()
+    win_set_patient(strbuf("P001 / LUAD ST3"))
+    win_set_status(strbuf("PIPELINE COMPLETE"))
+    cursor_move(FB_W //// 2, FB_H //// 2)
+
+    # ---- frame 1: heatmap + pathology overlay
+    win_set_view(VIEW_HEATMAP)
+    cursor_move(420, 300)
+    win_frame(app_risk)
+    IF frames_out == 1 {
+        export_bmp(strbuf("ocout/gui_heatmap.bmp"))
+    }
+    # ---- frame 2: metastasis graph (click the tab through the real event path)
+    input_click(TH_SIDEW + 4 + 118 + 40, TH_MENUH + 12)
+    win_handle(in_last_action)
+    cursor_move(560, 360)
+    win_frame(app_risk)
+    IF frames_out == 1 {
+        export_bmp(strbuf("ocout/gui_graph.bmp"))
+    }
+    # ---- frame 3: timeseries
+    input_click(TH_SIDEW + 4 + 236 + 40, TH_MENUH + 12)
+    win_handle(in_last_action)
+    cursor_move(700, 260)
+    win_frame(app_risk)
+    IF frames_out == 1 {
+        export_bmp(strbuf("ocout/gui_timeseries.bmp"))
+    }
+    # ---- frame 4: spatial fields
+    input_click(TH_SIDEW + 4 + 354 + 40, TH_MENUH + 12)
+    win_handle(in_last_action)
+    cursor_move(500, 400)
+    win_frame(app_risk)
+    IF frames_out == 1 {
+        export_bmp(strbuf("ocout/gui_spatial.bmp"))
+    }
+    win_vga_mirror()
+    RETURN win_frames
+}
+
+# prepare the growth/drug timeseries the TIMESERIES tab shows
+FUNC app_load_plots() : int<64> {
+    ts_reset()
+    DECL s0 : int<64> = ts_series(strbuf("LOGISTIC"), 120, 220, 255)
+    DECL s1 : int<64> = ts_series(strbuf("GOMPERTZ"), 255, 190, 90)
+    sim_config(SIM_GROWTH_LOG, 1.0, 240, g_ct)
+    growth_run(0, 240, 1.0)
+    DECL i : int<64> = 0
+    WHILE i < g_ts_len {
+        ts_push(s0, g_ts_n[i] / 1000000.0)
+        i = i + 2
+    }
+    growth_run(1, 240, 1.0)
+    i = 0
+    WHILE i < g_ts_len {
+        ts_push(s1, g_ts_n[i] / 1000000.0)
+        i = i + 2
+    }
+    RETURN ts_n
+}

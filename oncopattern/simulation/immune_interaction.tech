@@ -1,0 +1,99 @@
+# ============================================================================
+# oncopattern/simulation/immune_interaction.tech — tumour/immune dynamics.
+#
+# Lotka-Volterra predator-prey system with immune recruitment saturation:
+#     dT/dt = r T (1 - T/K) - kill * T * I
+#     dI/dt = rec * T * I / (g + T) - decay * I
+#
+# Three regimes are reachable: elimination, equilibrium, escape — the
+# immunoediting picture.  Integrated with RK4 (TECH scientific engine).
+#
+# META @module(name:sim_immune, provides:immune_run, requires:ode,sim_params)
+# ============================================================================
+
+IMPORT oncopattern/simulation/params
+IMPORT unvm/engines/scientific/ode
+
+DECL im_T   : buf<512, float<64>> = null
+DECL im_I   : buf<512, float<64>> = null
+DECL im_len : int<64> = 0
+DECL im_g   : float<64> = 100000000.0     # half-saturation of recruitment
+DECL im_src : float<64> = 20000.0         # constant marrow influx (cells/day)
+
+FUNC immune_dy(dummy : int<64>) : int<64> {
+    DECL r    : float<64> = p_growth_r[g_ct]
+    DECL K    : float<64> = p_growth_K[g_ct]
+    DECL kill : float<64> = p_im_kill[g_ct]
+    DECL rec  : float<64> = p_im_rec[g_ct]
+    DECL dec  : float<64> = p_im_decay[g_ct]
+    DECL T : float<64> = g_ode_y[0]
+    DECL I : float<64> = g_ode_y[1]
+    IF T < 0.0 {
+        T = 0.0
+    }
+    IF I < 0.0 {
+        I = 0.0
+    }
+    g_ode_dy[0] = r * T * (1.0 - T / K) - kill * T * I
+    g_ode_dy[1] = im_src + rec * T * I / (im_g + T) - dec * I
+    RETURN 0
+}
+
+# Returns the final tumour population.  i0 scales the initial immune pool.
+FUNC immune_run(steps : int<64>, h : float<64>, i0 : float<64>) : float<64> {
+    g_ode_n = 2
+    g_ode_t = 0.0
+    g_ode_y[0] = p_growth_N0[g_ct]
+    g_ode_y[1] = i0
+    IF steps > 512 {
+        steps = 512
+    }
+    im_len = 0
+    DECL s : int<64> = 0
+    WHILE s < steps {
+        im_T[im_len] = g_ode_y[0]
+        im_I[im_len] = g_ode_y[1]
+        im_len = im_len + 1
+        rk4_step(strbuf("immune_dy"), h)
+        s = s + 1
+    }
+    RETURN g_ode_y[0]
+}
+
+# immune score = immune cells per tumour cell at the end of the run
+FUNC immune_score() : float<64> {
+    IF im_len == 0 {
+        RETURN 0.0
+    }
+    RETURN oc_div(im_I[im_len - 1], im_T[im_len - 1])
+}
+
+# 0 = elimination, 1 = equilibrium, 2 = escape
+FUNC immune_regime() : int<64> {
+    IF im_len < 3 {
+        RETURN 1
+    }
+    DECL last : float<64> = im_T[im_len - 1]
+    DECL first : float<64> = im_T[0]
+    IF last < first * 0.10 {
+        RETURN 0
+    }
+    IF last > first * 10.0 {
+        RETURN 2
+    }
+    RETURN 1
+}
+
+FUNC immune_regime_name(r : int<64>) : buf<> {
+    MATCH r {
+        CASE 0 {
+            RETURN strbuf("elimination")
+        }
+        CASE 1 {
+            RETURN strbuf("equilibrium")
+        }
+        ELSE {
+            RETURN strbuf("escape")
+        }
+    }
+}

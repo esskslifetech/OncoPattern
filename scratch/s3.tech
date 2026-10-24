@@ -1,0 +1,18 @@
+DECL x : float<64> = 7.89
+YIELD x //// 1
+YIELD x % 1
+DECL y : float<64> = -3.2
+YIELD y //// 1
+DECL s1 : str<utf8> = "abc"
+DECL s2 : str<utf8> = "def"
+YIELD s1 + s2
+DECL b : buf<> = strbuf("hi ")
+YIELD mkstr(b)
+YIELD len(strbuf("hello"))
+DECL t : int<64> = 100
+YIELD t //// 7
+YIELD exp(1.0)
+YIELD log(2.718281828459045)
+DECL big : float<64> = 1.0e10
+YIELD big
+YIELD pow(2.0, 10.0)

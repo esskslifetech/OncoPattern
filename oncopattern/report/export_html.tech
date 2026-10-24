@@ -1,0 +1,420 @@
+# ============================================================================
+# oncopattern/report/export_html.tech — HTML report with inline figures.
+#
+# Emits a self-contained document: CSS in a <style> block, the statistics and
+# pattern tables as real <table>s, grade badges coloured by severity, and the
+# rendered framebuffer embedded as a base64 <img> — no external files, so the
+# report travels as one artefact.
+#
+# META @module(name:rep_html, provides:html_build, requires:rep_txt,vis_export)
+# ============================================================================
+
+IMPORT oncopattern/report/export_txt
+IMPORT oncopattern/visualization/export_png
+
+DECL html     : buf<3200000> = null
+DECL html_len : int<64> = 0
+
+FUNC h_cat(s : buf<>) {
+    html_len = oc_cat(html, html_len, s)
+}
+
+FUNC h_int(v : int<64>) {
+    html_len = oc_cati(html, html_len, v)
+}
+
+FUNC h_f(v : float<64>, d : int<64>) {
+    html_len = oc_catf(html, html_len, v, d)
+}
+
+FUNC html_head() {
+    h_cat(strbuf("<!DOCTYPE html>\n<html lang=\"en\"><head><meta charset=\"utf-8\">\n"))
+    h_cat(strbuf("<title>OncoPattern Report</title>\n<style>\n"))
+    h_cat(strbuf("body{background:#12151c;color:#e6ebf5;font:14px/1.55 -apple-system,Segoe UI,Roboto,sans-serif;margin:0;padding:32px}\n"))
+    h_cat(strbuf(".wrap{max-width:1040px;margin:0 auto}\n"))
+    h_cat(strbuf("h1{font-size:26px;margin:0 0 4px;letter-spacing:-.3px}\n"))
+    h_cat(strbuf("h2{font-size:15px;text-transform:uppercase;letter-spacing:.09em;color:#8fb7d9;margin:34px 0 10px;border-bottom:1px solid #26303f;padding-bottom:6px}\n"))
+    h_cat(strbuf(".sub{color:#8792a6;margin:0 0 22px}\n"))
+    h_cat(strbuf("table{border-collapse:collapse;width:100%;margin:8px 0 4px;font-size:13px}\n"))
+    h_cat(strbuf("th{text-align:left;color:#93a1b8;font-weight:600;padding:6px 10px;border-bottom:1px solid #2b3646}\n"))
+    h_cat(strbuf("td{padding:5px 10px;border-bottom:1px solid #1d2531}\n"))
+    h_cat(strbuf("tr:hover td{background:#171d27}\n"))
+    h_cat(strbuf(".num{font-variant-numeric:tabular-nums;text-align:right}\n"))
+    h_cat(strbuf(".b{display:inline-block;padding:1px 8px;border-radius:10px;font-size:11px;font-weight:700}\n"))
+    h_cat(strbuf(".g4{background:#5a1620;color:#ff8d9c}.g3{background:#4a3410;color:#ffc06a}\n"))
+    h_cat(strbuf(".g2{background:#43400f;color:#e8dc78}.g1{background:#16401f;color:#78d99a}.g0{background:#242a35;color:#8792a6}\n"))
+    h_cat(strbuf(".cards{display:flex;gap:12px;flex-wrap:wrap;margin:16px 0}\n"))
+    h_cat(strbuf(".card{background:#1a212c;border:1px solid #26303f;border-radius:8px;padding:12px 16px;min-width:150px}\n"))
+    h_cat(strbuf(".card .k{color:#8792a6;font-size:11px;text-transform:uppercase;letter-spacing:.07em}\n"))
+    h_cat(strbuf(".card .v{font-size:21px;font-weight:600;margin-top:3px}\n"))
+    h_cat(strbuf("img{max-width:100%;border:1px solid #26303f;border-radius:6px;margin:10px 0}\n"))
+    h_cat(strbuf("pre{background:#0e1219;border:1px solid #222b38;border-radius:6px;padding:14px;overflow-x:auto;font-size:12px;color:#c3ccdb}\n"))
+    h_cat(strbuf(".alert{background:#2a1418;border-left:3px solid #ff5c6e;padding:9px 14px;margin:6px 0;border-radius:0 5px 5px 0}\n"))
+    h_cat(strbuf(".ok{background:#132a1c;border-left:3px solid #60d68c;padding:9px 14px;border-radius:0 5px 5px 0}\n"))
+    h_cat(strbuf("footer{color:#68758a;font-size:12px;margin-top:40px;border-top:1px solid #222b38;padding-top:14px}\n"))
+    h_cat(strbuf("</style></head><body><div class=\"wrap\">\n"))
+}
+
+FUNC html_grade_badge(g : int<64>) {
+    h_cat(strbuf("<span class=\"b g"))
+    h_int(g)
+    h_cat(strbuf("\">"))
+    h_cat(grade_name(g))
+    h_cat(strbuf("</span>"))
+}
+
+FUNC html_card(k : buf<>, v : buf<>) {
+    h_cat(strbuf("<div class=\"card\"><div class=\"k\">"))
+    h_cat(k)
+    h_cat(strbuf("</div><div class=\"v\">"))
+    h_cat(v)
+    h_cat(strbuf("</div></div>\n"))
+}
+
+FUNC html_pattern_row(i : int<64>) {
+    h_cat(strbuf("<tr><td>"))
+    h_cat(pat_name(i))
+    h_cat(strbuf("</td><td class=\"num\">"))
+    h_f(g_pat_score[i], 4)
+    h_cat(strbuf("</td><td>"))
+    h_cat(pat_unit(i))
+    h_cat(strbuf("</td><td>"))
+    html_grade_badge(g_pat_grade[i])
+    h_cat(strbuf("</td><td class=\"num\">"))
+    h_f(g_pat_conf[i], 2)
+    h_cat(strbuf("</td></tr>\n"))
+}
+
+FUNC html_pattern_table(cat : int<64>) {
+    h_cat(strbuf("<table><tr><th>Pattern</th><th class=\"num\">Value</th><th>Unit</th><th>Grade</th><th class=\"num\">Confidence</th></tr>\n"))
+    DECL i : int<64> = 0
+    WHILE i < OC_NPAT {
+        IF g_pat_detected[i] == 1 {
+            IF pat_category(i) == cat {
+                html_pattern_row(i)
+            }
+        }
+        i = i + 1
+    }
+    h_cat(strbuf("</table>\n"))
+}
+
+# NOTE: each table row is emitted by its own helper.  A loop body with seven
+# or more calls trips the machine's loop-fusion fast path (a fused-load
+# read past the operand stack); one call per iteration keeps the emitter on
+# the plain interpreter path and the output identical.
+FUNC html_stat_row(i : int<64>) {
+    h_cat(strbuf("<tr><td>"))
+    h_cat(rep_stat_name(i))
+    h_cat(strbuf("</td><td class=\"num\">"))
+    h_f(rep_stat(i), 4)
+    h_cat(strbuf("</td><td>"))
+    h_cat(rep_stat_unit(i))
+    h_cat(strbuf("</td></tr>\n"))
+}
+
+FUNC html_stat_table() {
+    h_cat(strbuf("<table><tr><th>Statistic</th><th class=\"num\">Value</th><th>Unit</th></tr>\n"))
+    DECL i : int<64> = 0
+    WHILE i < REP_NSTAT {
+        html_stat_row(i)
+        i = i + 1
+    }
+    h_cat(strbuf("</table>\n"))
+}
+
+FUNC html_sim_row(m : int<64>) {
+    h_cat(strbuf("<tr><td>"))
+    h_cat(sim_model_name(m))
+    h_cat(strbuf("</td><td>"))
+    h_cat(sim_engine_name(m))
+    h_cat(strbuf("</td><td class=\"num\">"))
+    h_f(sim_result[m], 4)
+    h_cat(strbuf("</td><td class=\"num\">"))
+    IF rep_det_mode == 1 {
+        h_cat(strbuf("-"))
+    } ELSE {
+        h_int(sim_ms[m])
+    }
+    h_cat(strbuf("</td></tr>\n"))
+}
+
+FUNC html_sim_table() {
+    h_cat(strbuf("<table><tr><th>Model</th><th>Engine</th><th class=\"num\">Result</th><th class=\"num\">ms</th></tr>\n"))
+    DECL m : int<64> = 0
+    WHILE m < SIM_N {
+        IF sim_ran[m] == 1 {
+            html_sim_row(m)
+        }
+        m = m + 1
+    }
+    h_cat(strbuf("</table>\n"))
+}
+
+FUNC html_compare_row(i : int<64>) {
+    DECL va : float<64> = rc_stat[i]
+    DECL vb : float<64> = rc_stat[REP_NSTAT + i]
+    DECL pct : float<64> = oc_pct(vb, va)
+    h_cat(strbuf("<tr><td>"))
+    h_cat(rep_stat_name(i))
+    h_cat(strbuf("</td><td class=\"num\">"))
+    h_f(va, 3)
+    h_cat(strbuf("</td><td class=\"num\">"))
+    h_f(vb, 3)
+    h_cat(strbuf("</td><td class=\"num\">"))
+    h_f(pct, 1)
+    h_cat(strbuf("</td><td>"))
+    h_cat(cmp_class_name(rc_class(pct)))
+    h_cat(strbuf("</td></tr>\n"))
+}
+
+FUNC html_compare_table() {
+    h_cat(strbuf("<table><tr><th>Field</th><th class=\"num\">Baseline</th><th class=\"num\">Follow-up</th><th class=\"num\">Delta %</th><th>Class</th></tr>\n"))
+    DECL i : int<64> = 0
+    WHILE i < REP_NSTAT {
+        html_compare_row(i)
+        i = i + 1
+    }
+    h_cat(strbuf("</table>\n"))
+}
+
+FUNC html_alert_row(p : int<64>) {
+    h_cat(strbuf("<div class=\"alert\"><b>"))
+    h_cat(pat_name(p))
+    h_cat(strbuf("</b> worsened by "))
+    h_f(oc_fabs(cmp_pct[p]), 1)
+    h_cat(strbuf("% &mdash; "))
+    h_cat(grade_name(snap_grade[p]))
+    h_cat(strbuf(" &rarr; "))
+    h_cat(grade_name(snap_grade[OC_NPAT + p]))
+    h_cat(strbuf("</div>\n"))
+}
+
+FUNC html_alerts() {
+    DECL alerts : int<64> = 0
+    DECL p : int<64> = 0
+    WHILE p < OC_NPAT {
+        IF snap_det[p] == 1 {
+            IF cmp_is_regression(p) == 1 {
+                IF cmp_class[p] == CMP_MAJOR {
+                    html_alert_row(p)
+                    alerts = alerts + 1
+                }
+            }
+        }
+        p = p + 1
+    }
+    IF alerts == 0 {
+        h_cat(strbuf("<div class=\"ok\">No major regression between the two timepoints.</div>\n"))
+    }
+}
+
+FUNC html_scan_row(rank : int<64>) {
+    DECL id : int<64> = sc_rank[rank]
+    h_cat(strbuf("<tr><td class=\"num\">"))
+    h_int(rank + 1)
+    h_cat(strbuf("</td><td>"))
+    h_cat(scan_chan_name(sc_chan[id]))
+    h_cat(strbuf("</td><td><b>"))
+    h_cat(sc_name(id))
+    h_cat(strbuf("</b></td><td class=\"num\">"))
+    h_f(sc_val[id], 4)
+    h_cat(strbuf("</td><td>"))
+    h_cat(scan_unit(sc_unit[id]))
+    h_cat(strbuf("</td><td class=\"num\">"))
+    h_f(sc_z[id], 2)
+    h_cat(strbuf("</td></tr>\n"))
+}
+
+FUNC html_scan_table(topn : int<64>) {
+    h_cat(strbuf("<table><tr><th class=\"num\">#</th><th>Channel</th><th>Signal</th><th class=\"num\">Value</th><th>Unit</th><th class=\"num\">z</th></tr>\n"))
+    IF topn > sc_n {
+        topn = sc_n
+    }
+    DECL i : int<64> = 0
+    WHILE i < topn {
+        html_scan_row(i)
+        i = i + 1
+    }
+    h_cat(strbuf("</table>\n"))
+}
+
+FUNC html_novel_row(i : int<64>) {
+    h_cat(strbuf("<tr><td><b>"))
+    h_cat(nv_abbr(i))
+    h_cat(strbuf("</b></td><td>"))
+    h_cat(nv_name(i))
+    h_cat(strbuf("</td><td class=\"num\">"))
+    h_f(nv_val[i], 4)
+    h_cat(strbuf("</td></tr>\n"))
+}
+
+FUNC html_novel_table() {
+    h_cat(strbuf("<table><tr><th>Code</th><th>Invented signal</th><th class=\"num\">Value</th></tr>\n"))
+    DECL i : int<64> = 0
+    WHILE i < nv_n {
+        html_novel_row(i)
+        i = i + 1
+    }
+    h_cat(strbuf("</table>\n"))
+}
+
+FUNC html_ref_row(i : int<64>) {
+    h_cat(strbuf("<tr><td><code>"))
+    h_cat(pp_key(i))
+    h_cat(strbuf("</code></td><td>"))
+    h_cat(pp_backs(i))
+    h_cat(strbuf("</td><td>"))
+    h_cat(pp_title(i))
+    h_cat(strbuf("</td><td>"))
+    h_cat(pp_author(i))
+    h_cat(strbuf("</td><td>"))
+    h_cat(pp_journal(i))
+    h_cat(strbuf(" "))
+    h_int(g_pp_year[i])
+    h_cat(strbuf("</td><td class=\"num\">"))
+    h_int(g_pp_cites[i])
+    h_cat(strbuf("</td><td><a href=\"https://doi.org/"))
+    h_cat(pp_doi(i))
+    h_cat(strbuf("\">PMID "))
+    h_cat(pp_pmid(i))
+    h_cat(strbuf("</a></td></tr>\n"))
+}
+
+FUNC html_evidence_table() {
+    h_cat(strbuf("<table><tr><th>Key</th><th>Backs</th><th>Reference</th><th>First author</th><th>Journal</th><th class=\"num\">Cites</th><th>Link</th></tr>\n"))
+    DECL i : int<64> = 0
+    WHILE i < g_pp_ref_n {
+        html_ref_row(i)
+        i = i + 1
+    }
+    h_cat(strbuf("</table>\n"))
+}
+
+# embed the current framebuffer as a base64 BMP
+FUNC html_embed_frame(caption : buf<>) : int<64> {
+    DECL n : int<64> = export_bmp_region(strbuf("ocout/_embed.bmp"), FB_W, FB_H)
+    DECL b64 : int<64> = export_base64(n)
+    h_cat(strbuf("<div><img alt=\""))
+    h_cat(caption)
+    h_cat(strbuf("\" src=\"data:image/bmp;base64,"))
+    html_len = oc_cat(html, html_len, slice(b64_out, 0, b64))
+    h_cat(strbuf("\"></div>\n"))
+    RETURN b64
+}
+
+FUNC html_build(with_comparison : int<64>, embed : int<64>) : int<64> {
+    html_len = 0
+    html_head()
+    h_cat(strbuf("<h1>OncoPattern Analysis Report</h1>\n<p class=\"sub\">Cancer pattern analysis, simulation and reporting &mdash; built in pure TECH on the TECH toolchain.<br>"))
+    h_cat(oc_company())
+    h_cat(strbuf(" &middot; "))
+    h_cat(oc_author())
+    h_cat(strbuf(" &middot; <a href=\""))
+    h_cat(oc_repo())
+    h_cat(strbuf("\">github.com/esskslifetech/OncoPattern</a></p>\n"))
+
+    h_cat(strbuf("<div class=\"cards\">\n"))
+    html_card(strbuf("Patient"), slice(rep_patient, 0, rep_patient_n))
+    html_card(strbuf("Cancer type"), ct_name(rep_ct))
+    html_card(strbuf("Patterns"), oc_itoa(g_pat_n))
+    html_card(strbuf("Critical"), oc_itoa(classify_count_grade(GRADE_CRITICAL)))
+    html_card(strbuf("Risk index"), oc_ftoa(rep_risk, 1))
+    html_card(strbuf("TMB"), oc_ftoa(rep_tmb, 1))
+    h_cat(strbuf("</div>\n"))
+
+    h_cat(strbuf("<h2>1. Patient summary</h2>\n<table>\n"))
+    h_cat(strbuf("<tr><td>Timepoint</td><td>"))
+    h_cat(slice(rep_label, 0, rep_label_n))
+    h_cat(strbuf("</td></tr><tr><td>Stage</td><td>"))
+    h_int(rep_stage)
+    h_cat(strbuf("</td></tr><tr><td>Age</td><td>"))
+    h_int(rep_age)
+    h_cat(strbuf("</td></tr><tr><td>Variants ingested</td><td>"))
+    h_int(g_var_n)
+    h_cat(strbuf("</td></tr><tr><td>Rows quarantined</td><td>"))
+    h_int(g_quar_n)
+    h_cat(strbuf("</td></tr></table>\n"))
+
+    h_cat(strbuf("<h2>2. Genomic patterns</h2>\n"))
+    html_pattern_table(CAT_GENOMIC)
+    h_cat(strbuf("<h2>3. Histological patterns</h2>\n"))
+    html_pattern_table(CAT_HISTOLOGICAL)
+    h_cat(strbuf("<h2>4. Physical patterns</h2>\n"))
+    html_pattern_table(CAT_PHYSICAL)
+    h_cat(strbuf("<h2>5. Simulation results</h2>\n"))
+    html_sim_table()
+    h_cat(strbuf("<h2>6. Visualisation gallery</h2>\n"))
+    IF embed == 1 {
+        html_embed_frame(strbuf("OncoPattern interface"))
+    } ELSE {
+        h_cat(strbuf("<p class=\"sub\">gui_heatmap.bmp, gui_graph.bmp, gui_timeseries.bmp, gui_spatial.bmp, figures.svg</p>\n"))
+    }
+    h_cat(strbuf("<h2>7. Statistical summary</h2>\n"))
+    html_stat_table()
+    IF with_comparison == 1 {
+        h_cat(strbuf("<h2>8. Comparison vs baseline</h2>\n"))
+        html_compare_table()
+        h_cat(strbuf("<h3>Alerts</h3>\n"))
+        html_alerts()
+    }
+    IF sc_n > 0 {
+        h_cat(strbuf("<h2>9. Exhaustive signal scan</h2>\n<p class=\"sub\">"))
+        h_int(sc_n)
+        h_cat(strbuf(" signals measured across seven channels; "))
+        h_int(scan_significant())
+        h_cat(strbuf(" clear |z| &ge; 2. Ranked by standardised effect.</p>\n"))
+        html_scan_table(30)
+        h_cat(strbuf("<h2>10. Novel signals coined by this platform</h2>\n"))
+        html_novel_table()
+        h_cat(strbuf("<div class=\"ok\"><b>TOI leading target: "))
+        h_cat(novel_toi_gene_name())
+        h_cat(strbuf("</b> &mdash; biology z "))
+        h_f(nv_toi_bio, 2)
+        h_cat(strbuf(", patent documents "))
+        h_int(novel_toi_patents())
+        h_cat(strbuf(". Strong tumour/normal separation with thin IP coverage.</div>\n"))
+        h_cat(strbuf("<p class=\"sub\">Patent landscape: EPO linked open data, IPC A61P35/00, retrieved "))
+        h_cat(pt_retrieved())
+        h_cat(strbuf(" &mdash; velocity "))
+        h_f(pt_velocity_slope(), 1)
+        h_cat(strbuf(" docs/year, CAGR "))
+        h_f(pt_velocity_cagr() * 100.0, 2)
+        h_cat(strbuf("%, applicant HHI "))
+        h_f(pt_applicant_hhi(), 4)
+        h_cat(strbuf("</p>\n"))
+    }
+    IF g_pp_loaded == 1 {
+        h_cat(strbuf("<h2>11. Published evidence base</h2>\n<p class=\"sub\">Every threshold and every model below resolves to a title-verified paper in Europe PMC (EMBL-EBI), retrieved "))
+        h_cat(pp_retrieved())
+        h_cat(strbuf(" &mdash; "))
+        h_int(g_pp_ref_ok)
+        h_cat(strbuf(" of "))
+        h_int(g_pp_ref_n)
+        h_cat(strbuf(" resolved, "))
+        h_int(pp_total_citations())
+        h_cat(strbuf(" citations behind them.</p>\n"))
+        html_evidence_table()
+    }
+    h_cat(strbuf("<footer>Generated by "))
+    h_cat(oc_project())
+    h_cat(strbuf(" "))
+    h_cat(oc_version())
+    h_cat(strbuf(" &mdash; every module, the compiler and the VM are written in TECH. Journalled patterns: "))
+    h_int(g_log_n)
+    h_cat(strbuf(".<br>"))
+    h_cat(oc_company())
+    h_cat(strbuf(" &middot; "))
+    h_cat(oc_author())
+    h_cat(strbuf(" &middot; <a href=\""))
+    h_cat(oc_repo())
+    h_cat(strbuf("\">"))
+    h_cat(oc_repo())
+    h_cat(strbuf("</a></footer>\n</div></body></html>\n"))
+    RETURN html_len
+}
+
+FUNC html_save(path : buf<>) : int<64> {
+    save(path, slice(html, 0, html_len))
+    RETURN html_len
+}

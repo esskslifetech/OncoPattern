@@ -1,0 +1,159 @@
+# ============================================================================
+# oncopattern/simulation/metastasis.tech — dissemination on organ topology.
+#
+# The organ graph (data/ingest_json.tech) carries edge weights
+#     w = 1 / (vascular flow x circulating-tumour-cell survival)
+# so the cheapest path is the most probable metastatic route.  Dijkstra with
+# an O(V^2) scan gives the route table; the seeding probability of each organ
+# is exp(-cost), the survival product along the path.
+#
+# META @module(name:sim_metastasis, provides:mets_run, requires:schema)
+# ============================================================================
+
+IMPORT oncopattern/data/schema
+
+DECL mt_dist : buf<32, float<64>> = null    # cheapest cost from the primary
+DECL mt_prev : buf<32, int<64>>   = null    # predecessor on that path
+DECL mt_seen : buf<32, int<64>>   = null
+DECL mt_prob : buf<32, float<64>> = null    # seeding probability
+DECL MT_INF  : float<64> = 1000000000.0
+
+# Dijkstra from `src` over the undirected organ graph.
+FUNC mets_run(src : int<64>) : int<64> {
+    DECL i : int<64> = 0
+    WHILE i < g_node_n {
+        mt_dist[i] = MT_INF
+        mt_prev[i] = -1
+        mt_seen[i] = 0
+        mt_prob[i] = 0.0
+        i = i + 1
+    }
+    IF g_node_n == 0 {
+        RETURN 0
+    }
+    mt_dist[src] = 0.0
+    DECL settled : int<64> = 0
+    WHILE settled < g_node_n {
+        # pick the unsettled node with the smallest tentative cost
+        DECL best : int<64> = -1
+        DECL bestd : float<64> = MT_INF
+        i = 0
+        WHILE i < g_node_n {
+            IF mt_seen[i] == 0 {
+                IF mt_dist[i] < bestd {
+                    bestd = mt_dist[i]
+                    best = i
+                }
+            }
+            i = i + 1
+        }
+        IF best < 0 {
+            settled = g_node_n
+        } ELSE {
+            mt_seen[best] = 1
+            # relax every incident edge (graph stored as an edge list)
+            DECL e : int<64> = 0
+            WHILE e < g_edge_n {
+                DECL a : int<64> = g_edge_a[e]
+                DECL b : int<64> = g_edge_b[e]
+                DECL w : float<64> = g_edge_w[e]
+                IF a == best {
+                    IF mt_dist[best] + w < mt_dist[b] {
+                        mt_dist[b] = mt_dist[best] + w
+                        mt_prev[b] = best
+                    }
+                }
+                IF b == best {
+                    IF mt_dist[best] + w < mt_dist[a] {
+                        mt_dist[a] = mt_dist[best] + w
+                        mt_prev[a] = best
+                    }
+                }
+                e = e + 1
+            }
+            settled = settled + 1
+        }
+    }
+    # seeding probability: survival decays exponentially along the route
+    i = 0
+    WHILE i < g_node_n {
+        IF mt_dist[i] < MT_INF {
+            mt_prob[i] = exp(0.0 - mt_dist[i] * 0.20)
+        }
+        i = i + 1
+    }
+    mt_prob[src] = 1.0
+    RETURN g_node_n
+}
+
+# the organ with the highest seeding probability, excluding the primary
+FUNC mets_top_target(src : int<64>) : int<64> {
+    DECL best : int<64> = src
+    DECL bp : float<64> = 0.0
+    DECL i : int<64> = 0
+    WHILE i < g_node_n {
+        IF i != src {
+            IF mt_prob[i] > bp {
+                bp = mt_prob[i]
+                best = i
+            }
+        }
+        i = i + 1
+    }
+    RETURN best
+}
+
+# hop count of the cheapest route to `dst`
+FUNC mets_hops(dst : int<64>) : int<64> {
+    DECL h : int<64> = 0
+    DECL cur : int<64> = dst
+    WHILE cur >= 0 {
+        IF mt_prev[cur] < 0 {
+            RETURN h
+        }
+        cur = mt_prev[cur]
+        h = h + 1
+        IF h > 64 {
+            RETURN h
+        }
+    }
+    RETURN h
+}
+
+# render the route to `dst` as "lung -> lymph_node -> liver"
+#
+# The predecessor walk is bounded: an unpopulated graph leaves mt_prev[0] = 0,
+# which is a self-loop, and an unbounded walk would never terminate.
+FUNC mets_route_text(dst : int<64>, out : buf<>, at : int<64>) : int<64> {
+    DECL n : int<64> = 0
+    DECL cur : int<64> = dst
+    DECL guard : int<64> = 0
+    WHILE cur >= 0 {
+        IF n < 32 {
+            mt_seen[n] = cur
+            n = n + 1
+        }
+        DECL nxt : int<64> = mt_prev[cur]
+        IF nxt == cur {
+            cur = -1
+        } ELSE {
+            cur = nxt
+        }
+        guard = guard + 1
+        IF guard > 64 {
+            cur = -1
+        }
+    }
+    IF n == 0 {
+        RETURN oc_cat(out, at, strbuf("(no route)"))
+    }
+    DECL i : int<64> = n - 1
+    WHILE i >= 0 {
+        at = oc_cat(out, at, oc_node_name(mt_seen[i]))
+        IF i > 0 {
+            at = oc_cat(out, at, strbuf(" -> "))
+        }
+        i = i - 1
+    }
+    RETURN at
+}

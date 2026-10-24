@@ -1,0 +1,110 @@
+# ============================================================================
+# oncopattern/test/harness.tech — the assertion harness shared by every test.
+#
+# Results accumulate into a text buffer that each test saves as its
+# certificate; print() is a no-op on the machine, so a report file is the
+# only trustworthy channel (and it doubles as an artefact).
+#
+# META @module(name:test_harness, provides:t_*, requires:constants)
+# ============================================================================
+
+IMPORT oncopattern/core/constants
+
+DECL t_buf   : buf<65536> = null
+DECL t_len   : int<64> = 0
+DECL t_pass  : int<64> = 0
+DECL t_fail  : int<64> = 0
+DECL t_n     : int<64> = 0
+DECL t_scr   : buf<64> = null      # scratch (machine contract 4: typed buffers are global)
+
+FUNC t_begin(title : buf<>) {
+    t_len = 0
+    t_pass = 0
+    t_fail = 0
+    t_n = 0
+    t_len = oc_cat(t_buf, t_len, title)
+    t_len = oc_nl(t_buf, t_len)
+    t_len = oc_rep(t_buf, t_len, 61, 74)
+    t_len = oc_nl(t_buf, t_len)
+}
+
+FUNC t_row(ok : int<64>, name : buf<>, got : buf<>, want : buf<>) {
+    t_n = t_n + 1
+    DECL s : int<64> = t_len
+    IF ok == 1 {
+        t_len = oc_cat(t_buf, t_len, strbuf("PASS  "))
+        t_pass = t_pass + 1
+    } ELSE {
+        t_len = oc_cat(t_buf, t_len, strbuf("FAIL  "))
+        t_fail = t_fail + 1
+    }
+    t_len = oc_cat(t_buf, t_len, name)
+    t_len = oc_pad(t_buf, t_len, s, 48)
+    t_len = oc_cat(t_buf, t_len, strbuf("got "))
+    t_len = oc_cat(t_buf, t_len, got)
+    t_len = oc_pad(t_buf, t_len, s, 74)
+    t_len = oc_cat(t_buf, t_len, strbuf("want "))
+    t_len = oc_cat(t_buf, t_len, want)
+    t_len = oc_nl(t_buf, t_len)
+}
+
+FUNC t_eqi(name : buf<>, got : int<64>, want : int<64>) : int<64> {
+    DECL ok : int<64> = 0
+    IF got == want {
+        ok = 1
+    }
+    t_row(ok, name, oc_itoa(got), oc_itoa(want))
+    RETURN ok
+}
+
+# float equality within tol
+FUNC t_eqf(name : buf<>, got : float<64>, want : float<64>, tol : float<64>) : int<64> {
+    DECL ok : int<64> = 0
+    IF oc_fabs(got - want) <= tol {
+        ok = 1
+    }
+    t_row(ok, name, oc_ftoa(got, 6), oc_ftoa(want, 6))
+    RETURN ok
+}
+
+FUNC t_true(name : buf<>, cond : int<64>) : int<64> {
+    t_row(cond, name, oc_itoa(cond), strbuf("1"))
+    RETURN cond
+}
+
+# value must lie in [lo, hi]
+FUNC t_range(name : buf<>, got : float<64>, lo : float<64>, hi : float<64>) : int<64> {
+    DECL ok : int<64> = 0
+    IF got >= lo {
+        IF got <= hi {
+            ok = 1
+        }
+    }
+    DECL n : int<64> = 0
+    n = oc_cat(t_scr, n, oc_ftoa(lo, 3))
+    n = oc_cat(t_scr, n, strbuf(".."))
+    n = oc_cat(t_scr, n, oc_ftoa(hi, 3))
+    t_row(ok, name, oc_ftoa(got, 6), slice(t_scr, 0, n))
+    RETURN ok
+}
+
+FUNC t_note(s : buf<>) {
+    t_len = oc_cat(t_buf, t_len, strbuf("      # "))
+    t_len = oc_cat(t_buf, t_len, s)
+    t_len = oc_nl(t_buf, t_len)
+}
+
+# write the certificate; returns 0 when everything passed
+FUNC t_end(path : buf<>) : int<64> {
+    t_len = oc_rep(t_buf, t_len, 61, 74)
+    t_len = oc_nl(t_buf, t_len)
+    t_len = oc_cat(t_buf, t_len, strbuf("TOTAL "))
+    t_len = oc_cati(t_buf, t_len, t_n)
+    t_len = oc_cat(t_buf, t_len, strbuf("   PASS "))
+    t_len = oc_cati(t_buf, t_len, t_pass)
+    t_len = oc_cat(t_buf, t_len, strbuf("   FAIL "))
+    t_len = oc_cati(t_buf, t_len, t_fail)
+    t_len = oc_nl(t_buf, t_len)
+    save(path, slice(t_buf, 0, t_len))
+    RETURN t_fail
+}

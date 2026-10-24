@@ -1,0 +1,112 @@
+# ============================================================================
+# oncopattern/simulation/stochastic.tech — Gillespie SSA (direct method).
+#
+# Exact stochastic kinetics for small populations, where the deterministic
+# ODE picture breaks down (early clonal expansion, minimal residual disease).
+#
+# Reactions on a tumour cell count N:
+#     R1: N -> N+1   propensity  b*N        (division)
+#     R2: N -> N-1   propensity  d*N        (death)
+#     R3: N -> N-1   propensity  k*N*I/(h+N) (immune clearance, saturating)
+#
+# Randomness comes from a seeded LCG so runs are exactly reproducible — a
+# requirement of the determinism contract (same input -> same sha256).
+#
+# META @module(name:sim_ssa, provides:ssa_run, requires:sim_params)
+# ============================================================================
+
+IMPORT oncopattern/simulation/params
+
+DECL SSA_SEED0 : int<64> = 20260823      # the configured seed for a run
+DECL ssa_seed  : int<64> = 20260823      # the running LCG state (mutated)
+DECL ssa_t     : buf<512, float<64>> = null
+DECL ssa_n     : buf<512, int<64>>   = null
+DECL ssa_len   : int<64> = 0
+DECL ssa_events : int<64> = 0
+DECL ssa_extinct : int<64> = 0
+
+# 32-bit LCG (Numerical Recipes constants) — identical to tools/gen_datasets.py
+FUNC ssa_rand() : int<64> {
+    ssa_seed = (1664525 * ssa_seed + 1013904223) % 4294967296
+    RETURN ssa_seed
+}
+
+FUNC ssa_unit() : float<64> {
+    RETURN ssa_rand() / 4294967296.0
+}
+
+# Run until `max_events` firings or extinction.  Returns the final count.
+FUNC ssa_run(n0 : int<64>, max_events : int<64>, seed : int<64>) : int<64> {
+    ssa_seed = seed
+    DECL b : float<64> = 0.030          # division rate  (1/day)
+    DECL d : float<64> = 0.014          # spontaneous death
+    DECL k : float<64> = 0.010          # immune clearance
+    DECL immune : float<64> = 500.0
+    DECL h : float<64> = 1000.0
+    DECL N : int<64> = n0
+    DECL t : float<64> = 0.0
+    ssa_len = 0
+    ssa_events = 0
+    ssa_extinct = 0
+    DECL ev : int<64> = 0
+    WHILE ev < max_events {
+        IF N <= 0 {
+            ssa_extinct = 1
+            ev = max_events
+        } ELSE {
+            DECL a1 : float<64> = b * N
+            DECL a2 : float<64> = d * N
+            DECL a3 : float<64> = k * N * immune / (h + N)
+            DECL a0 : float<64> = a1 + a2 + a3
+            IF a0 <= 0.0 {
+                ev = max_events
+            } ELSE {
+                # time to the next reaction: exponential inversion
+                DECL u1 : float<64> = ssa_unit()
+                IF u1 < 0.000001 {
+                    u1 = 0.000001
+                }
+                DECL tau : float<64> = (0.0 - log(u1)) / a0
+                t = t + tau
+                # which reaction fired
+                DECL u2 : float<64> = ssa_unit() * a0
+                IF u2 < a1 {
+                    N = N + 1
+                } ELSE {
+                    N = N - 1
+                }
+                ssa_events = ssa_events + 1
+                IF ssa_len < 512 {
+                    ssa_t[ssa_len] = t
+                    ssa_n[ssa_len] = N
+                    ssa_len = ssa_len + 1
+                }
+                ev = ev + 1
+            }
+        }
+    }
+    RETURN N
+}
+
+# mean population over the recorded trajectory
+FUNC ssa_mean() : float<64> {
+    DECL s : float<64> = 0.0
+    DECL i : int<64> = 0
+    WHILE i < ssa_len {
+        s = s + ssa_n[i]
+        i = i + 1
+    }
+    RETURN oc_div(s, ssa_len)
+}
+
+FUNC ssa_max() : int<64> {
+    DECL m : int<64> = 0
+    DECL i : int<64> = 0
+    WHILE i < ssa_len {
+        IF ssa_n[i] > m {
+            m = ssa_n[i]
+        }
+        i = i + 1
+    }
+    RETURN m
+}

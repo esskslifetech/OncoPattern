@@ -1,0 +1,154 @@
+# ============================================================================
+# oncopattern/data/ingest_csv.tech — CSV / TSV parser for clinical datasets
+# and gene-expression matrices.
+#
+# Single forward pass over the byte image: split on newlines, split on the
+# delimiter, record each cell's (offset,length) and its numeric value if the
+# field parses as a number.  Text is never copied — cells are slices of the
+# loaded source, so ingest is O(bytes) with one allocation.
+#
+# META @module(name:ingest_csv, provides:csv_load, requires:schema)
+# ============================================================================
+
+IMPORT oncopattern/data/schema
+
+# is b[from..end) a number?  (optional sign, digits, at most one dot)
+FUNC csv_is_numeric(b : buf<>, from : int<64>, end : int<64>) : int<64> {
+    IF from >= end {
+        RETURN 0
+    }
+    DECL i : int<64> = from
+    DECL digits : int<64> = 0
+    DECL dots : int<64> = 0
+    IF b[i] == 45 {
+        i = i + 1
+    }
+    WHILE i < end {
+        IF oc_is_digit(b[i]) == 1 {
+            digits = digits + 1
+        } ELSE {
+            IF b[i] == 46 {
+                dots = dots + 1
+            } ELSE {
+                RETURN 0
+            }
+        }
+        i = i + 1
+    }
+    IF digits == 0 {
+        RETURN 0
+    }
+    IF dots > 1 {
+        RETURN 0
+    }
+    RETURN 1
+}
+
+# Parse the whole table.  `delim` is 44 for CSV, 9 for TSV.
+FUNC csv_parse(src : buf<>, delim : int<64>) : int<64> {
+    g_csv_src = src
+    DECL n : int<64> = len(src)
+    DECL pos : int<64> = 0
+    DECL row : int<64> = 0
+    DECL cols : int<64> = 0
+    DECL cells : int<64> = 0
+
+    WHILE pos < n {
+        # ---- locate the end of this line
+        DECL eol : int<64> = oc_find(src, pos, n, 10)
+        IF eol < 0 {
+            eol = n
+        }
+        IF eol > pos {
+            # ---- split the line into cells
+            DECL c : int<64> = 0
+            DECL fs : int<64> = pos
+            WHILE fs <= eol {
+                DECL fe : int<64> = oc_find(src, fs, eol, delim)
+                IF fe < 0 {
+                    fe = eol
+                }
+                IF cells < OC_MAX_CELL {
+                    g_csv_off[cells] = fs
+                    g_csv_len[cells] = fe - fs
+                    IF csv_is_numeric(src, fs, fe) == 1 {
+                        g_csv_num[cells] = oc_atof(src, fs, fe)
+                        g_csv_isnum[cells] = 1
+                    } ELSE {
+                        g_csv_num[cells] = 0.0
+                        g_csv_isnum[cells] = 0
+                    }
+                    cells = cells + 1
+                }
+                c = c + 1
+                fs = fe + 1
+            }
+            IF row == 0 {
+                cols = c
+            }
+            row = row + 1
+        }
+        pos = eol + 1
+    }
+    g_csv_rows = row
+    g_csv_cols = cols
+    RETURN row
+}
+
+FUNC csv_load(path : buf<>) : int<64> {
+    RETURN csv_parse(load(path), 44)
+}
+
+FUNC tsv_load(path : buf<>) : int<64> {
+    RETURN csv_parse(load(path), 9)
+}
+
+# ---------------------------------------------------------------------------
+# Gene-expression matrix: row 0 is the sample header, column 0 is the gene
+# name, the rest is a genes x samples matrix of log2(FPKM+1).
+# ---------------------------------------------------------------------------
+FUNC expr_load(path : buf<>) : int<64> {
+    DECL rows : int<64> = csv_load(path)
+    IF rows < 2 {
+        RETURN 0
+    }
+    DECL g : int<64> = rows - 1
+    DECL s : int<64> = g_csv_cols - 1
+    IF g > OC_MAX_GENE {
+        g = OC_MAX_GENE
+    }
+    IF s > OC_MAX_SAMP {
+        s = OC_MAX_SAMP
+    }
+    g_expr_g = g
+    g_expr_s = s
+    DECL i : int<64> = 0
+    WHILE i < g {
+        DECL k0 : int<64> = (i + 1) * g_csv_cols
+        g_gene_off[i] = g_csv_off[k0]
+        g_gene_len[i] = g_csv_len[k0]
+        DECL j : int<64> = 0
+        WHILE j < s {
+            g_expr[i * s + j] = g_csv_num[k0 + 1 + j]
+            j = j + 1
+        }
+        i = i + 1
+    }
+    RETURN g
+}
+
+# mean expression of gene `gi` over samples [s0, s1)
+FUNC expr_group_mean(gi : int<64>, s0 : int<64>, s1 : int<64>) : float<64> {
+    DECL sum : float<64> = 0.0
+    DECL j : int<64> = s0
+    WHILE j < s1 {
+        sum = sum + g_expr[gi * g_expr_s + j]
+        j = j + 1
+    }
+    RETURN oc_div(sum, s1 - s0)
+}
+
+# log2 fold change of tumour group vs normal group
+FUNC expr_log_fc(gi : int<64>, n0 : int<64>, n1 : int<64>, t0 : int<64>, t1 : int<64>) : float<64> {
+    RETURN expr_group_mean(gi, t0, t1) - expr_group_mean(gi, n0, n1)
+}

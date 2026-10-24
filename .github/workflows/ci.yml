@@ -1,0 +1,86 @@
+# ============================================================================
+# OncoPattern — CI
+#
+# Two independent jobs:
+#
+#   hygiene       the tree is publishable: no build output tracked, no CRLF, no
+#                 IMPORT pointing at a module that does not exist, no dead
+#                 relative link.  Needs no toolchain, so it is fast and always
+#                 runs.
+#   certificates  the package built against a fresh TECH checkout: every
+#                 certificate, then one full pipeline run.
+#
+# TECH is a public repository, so the second job clones it rather than
+# depending on a cached binary.
+# ============================================================================
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  hygiene:
+    name: Repository hygiene
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Check the tree is publishable
+        run: python3 tools/check_repo.py --verbose
+
+  certificates:
+    name: Certificates on TECH
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout OncoPattern
+        uses: actions/checkout@v4
+        with:
+          path: OncoPattern
+
+      - name: Checkout the TECH toolchain
+        uses: actions/checkout@v4
+        with:
+          repository: esskslifetech/TECH
+          path: TECH
+
+      - name: Run every certificate
+        working-directory: OncoPattern
+        env:
+          TECH_ROOT: ${{ github.workspace }}/TECH
+        run: |
+          # the launchers are stored without executable bits in the checkout;
+          # ocbuild restores the toolchain's own, these two are ours
+          chmod +x tools/ocbuild tools/runtests
+          tools/runtests
+
+      - name: Run the full pipeline
+        working-directory: OncoPattern
+        env:
+          TECH_ROOT: ${{ github.workspace }}/TECH
+        run: tools/ocbuild run config/boot.tech oncopattern
+
+      - name: Keep the run summary
+        uses: actions/upload-artifact@v4
+        with:
+          name: oc-run-summary
+          path: |
+            results/run_summary.txt
+            results/report_t0.txt
+            results/report_compare.txt
+            results/figures.svg
+          if-no-files-found: error
+          retention-days: 14

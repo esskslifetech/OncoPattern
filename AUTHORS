@@ -1,0 +1,14 @@
+OncoPattern
+Cancer pattern analysis, simulation, visualisation and reporting,
+written entirely in .tech on the TECH self-hosting toolchain.
+
+Author      K-S (Kanishk-Soni)
+Company     ESS KS Life Tech
+Repository  https://github.com/esskslifetech/OncoPattern_Via_TECH
+Toolchain   https://github.com/esskslifetech/TECH
+
+External data sources used at run time, with thanks:
+  European Patent Office — Linked Open Data SPARQL endpoint
+                           https://data.epo.org/linked-data/query
+  Europe PMC (EMBL-EBI)  — REST search over PubMed/MEDLINE and PMC
+                           https://www.ebi.ac.uk/europepmc/

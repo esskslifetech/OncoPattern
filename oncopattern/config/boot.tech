@@ -1,0 +1,160 @@
+# ============================================================================
+# oncopattern/config/boot.tech — the application entry point.
+#
+# This is the file passed to `techc link`; it pulls the whole 42-module graph
+# in through a single IMPORT and then executes the end-to-end run:
+#
+#   P1 ingest + validate    both timepoints of patient P001
+#   P2 detect + classify    genomic, histological and physical patterns
+#   P3 simulate             12 models, two-resolution convergence checks
+#   P4 visualise            four views -> BMP, vector figures -> SVG
+#   P5 report               TXT + self-contained HTML
+#   P6 compare              t0 vs t1, field by field, with alerts
+#   P7 GUI                  widget tree, scripted events, composed frames
+#   P8 certificates         checksums for every artefact
+#
+# Nothing here is a stub: each call runs the real analysis over the real
+# dataset and writes real files.
+#
+# META @module(name:boot, provides:main, requires:app_main)
+# META @entry(main)
+# ============================================================================
+
+IMPORT oncopattern/core/app_main
+
+DECL boot_t0 : int<64> = sys_ms()
+DECL sum     : buf<16384> = null
+DECL sn      : int<64> = 0
+
+FUNC line(k : buf<>, v : buf<>) {
+    DECL s : int<64> = sn
+    sn = oc_cat(sum, sn, k)
+    sn = oc_pad(sum, sn, s, 34)
+    sn = oc_cat(sum, sn, v)
+    sn = oc_nl(sum, sn)
+}
+
+FUNC linei(k : buf<>, v : int<64>) {
+    line(k, oc_itoa(v))
+}
+
+FUNC linef(k : buf<>, v : float<64>, d : int<64>) {
+    line(k, oc_ftoa(v, d))
+}
+
+sn = oc_cat(sum, sn, strbuf("ONCOPATTERN — END TO END RUN\n"))
+sn = oc_cat(sum, sn, oc_company())
+sn = oc_cat(sum, sn, strbuf("  ·  "))
+sn = oc_cat(sum, sn, oc_author())
+sn = oc_nl(sum, sn)
+sn = oc_cat(sum, sn, oc_repo())
+sn = oc_nl(sum, sn)
+sn = oc_rep(sum, sn, 61, 74)
+sn = oc_nl(sum, sn)
+
+# ---------------------------------------------------------------------------
+# P1-P3: baseline timepoint (t0)
+# ---------------------------------------------------------------------------
+sess_begin(1)
+params_init()
+DECL ok : int<64> = app_run(strbuf("ocdata/variants_P001_t0.vcf"), CT_LUAD, 0)
+IF app_inputs_ok() == 0 {
+    sn = oc_cat(sum, sn, strbuf("FATAL: "))
+    sn = oc_cati(sum, sn, g_missing)
+    sn = oc_cat(sum, sn, strbuf(" input file(s) unreadable.\n"))
+    sn = oc_cat(sum, sn, strbuf("Run from a directory containing ocdata/ (the datasets).\n"))
+    sn = oc_rep(sum, sn, 61, 74)
+    sn = oc_nl(sum, sn)
+}
+report_from_ingest(strbuf("t0 baseline"))
+rc_capture(0)
+
+linei(strbuf("t0 variants ingested"), g_var_n)
+linei(strbuf("t0 rows quarantined"), g_quar_n)
+linei(strbuf("t0 patterns detected"), g_pat_n)
+linei(strbuf("t0 critical findings"), classify_count_grade(GRADE_CRITICAL))
+linef(strbuf("t0 risk index"), rep_risk, 2)
+linei(strbuf("t0 patterns journalled"), g_log_n)
+linei(strbuf("signals scanned"), sc_n)
+linei(strbuf("signals |z| >= 2"), scan_significant())
+linei(strbuf("novel signals coined"), nv_n)
+line(strbuf("TOI leading target"), novel_toi_gene_name())
+linei(strbuf("  its patent documents"), novel_toi_patents())
+linef(strbuf("  its biology z-score"), nv_toi_bio, 2)
+linei(strbuf("patent genes surveyed"), g_pt_gene_n)
+linei(strbuf("patent IPC classes"), g_pt_cls_n)
+linef(strbuf("patent velocity docs/yr"), pt_velocity_slope(), 1)
+linei(strbuf("evidence refs resolved"), g_pp_ref_ok)
+linei(strbuf("  of thresholds/models"), g_pp_ref_n)
+linei(strbuf("  citations behind them"), pp_total_citations())
+linef(strbuf("literature velocity/yr"), pp_velocity_slope(), 1)
+line(strbuf("NDS leading target"), novel_nds_gene_name())
+linei(strbuf("  its papers"), nv_nds_pap)
+linei(strbuf("  its patents"), nv_nds_pat)
+linef(strbuf("research-to-IP lag (RIL)"), novel_ril(), 3)
+linef(strbuf("evidence support index"), novel_esi(), 3)
+
+# report for the baseline alone
+report_emit(strbuf("ocout/report_t0.txt"), strbuf("ocout/report_t0.html"), 0, 0)
+linei(strbuf("t0 report bytes"), txt_len)
+
+# ---------------------------------------------------------------------------
+# P4/P7: visualisation + GUI frames from the baseline state
+# ---------------------------------------------------------------------------
+app_load_plots()
+app_gui(1)
+linei(strbuf("GUI frames composed"), win_frames)
+line(strbuf("frame checksum"), win_frame_sha())
+
+# vector export
+svg_begin(900, 660)
+svg_text(24, 30, strbuf("OncoPattern — expression + growth"), 16, 226, 232, 244)
+svg_heatmap(24, 60, 14, 9)
+DECL sgrow : int<64> = ts_series(strbuf("growth"), 120, 220, 255)
+DECL gi : int<64> = 0
+WHILE gi < g_ts_len {
+    ts_push(sgrow, g_ts_n[gi] / 1000000.0)
+    gi = gi + 4
+}
+svg_polyline(sgrow, 250, 460, 620, 160)
+svg_text(250, 640, strbuf("logistic tumour growth, 240 days"), 12, 140, 152, 172)
+svg_end()
+linei(strbuf("SVG bytes"), svg_save(strbuf("ocout/figures.svg")))
+
+# ---------------------------------------------------------------------------
+# P1-P3 again: follow-up timepoint (t1)
+# ---------------------------------------------------------------------------
+sess_begin(2)
+app_run(strbuf("ocdata/variants_P001_t1.vcf"), CT_LUAD, 1)
+report_from_ingest(strbuf("t1 follow-up"))
+rc_capture(1)
+
+linei(strbuf("t1 variants ingested"), g_var_n)
+linei(strbuf("t1 patterns detected"), g_pat_n)
+linei(strbuf("t1 critical findings"), classify_count_grade(GRADE_CRITICAL))
+linef(strbuf("t1 risk index"), rep_risk, 2)
+
+# ---------------------------------------------------------------------------
+# P6: comparison report (t0 vs t1) — text + HTML with the frame embedded
+# ---------------------------------------------------------------------------
+DECL majors : int<64> = pat_compare(0, 1)
+report_emit(strbuf("ocout/report_compare.txt"), strbuf("ocout/report_compare.html"), 1, 1)
+linei(strbuf("major changes"), majors)
+linei(strbuf("grade escalations"), cmp_alerts)
+linei(strbuf("comparison report bytes"), txt_len)
+linei(strbuf("html report bytes"), html_len)
+
+# ---------------------------------------------------------------------------
+# P8: convergence + determinism certificates
+# ---------------------------------------------------------------------------
+linef(strbuf("growth convergence deviation"), sim_convergence(SIM_GROWTH_LOG, 120, 2.0), 8)
+linef(strbuf("diffusion convergence dev"), sim_convergence(SIM_DIFFUSION, 60, 0.20), 8)
+linef(strbuf("Markov mass conservation"), cascade_mass(), 8)
+line(strbuf("report checksum"), report_checksum())
+
+sn = oc_rep(sum, sn, 61, 74)
+sn = oc_nl(sum, sn)
+linei(strbuf("total runtime ms"), sys_ms() - boot_t0)
+
+save("ocout/run_summary.txt", slice(sum, 0, sn))
+YIELD mkstr(slice(sum, 0, sn))

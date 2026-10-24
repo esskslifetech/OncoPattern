@@ -1,0 +1,25 @@
+DECL cfg : data<model:int<64>, dt:float<64>, steps:int<64>> = null
+FUNC f(m : int<64>) : float<64> {
+    DECL out : float<64> = 0.0
+    MATCH m {
+        CASE 0 {
+            DECL i0 : int<64> = 0
+            WHILE i0 < 3 {
+                out = out + 1.0
+                i0 = i0 + 1
+            }
+        }
+        CASE 1 {
+            out = 5.0
+        }
+        ELSE {
+            out = 9.0
+        }
+    }
+    RETURN out
+}
+cfg.model = 2
+YIELD f(0)
+YIELD f(1)
+YIELD f(7)
+YIELD cfg.model

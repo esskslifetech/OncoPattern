@@ -1,0 +1,111 @@
+# ============================================================================
+# oncopattern/visualization/graph_view.tech — network diagrams.
+#
+# Draws the organ-topology / pathway graph with a deterministic circular
+# layout (no force iteration, so the picture is byte-identical run to run),
+# edge weights as line brightness, node seeding probability as fill colour,
+# and the highest-probability metastatic route highlighted.
+#
+# META @module(name:vis_graph, provides:graph_draw, requires:vis_renderer)
+# ============================================================================
+
+IMPORT oncopattern/visualization/renderer
+IMPORT oncopattern/simulation/metastasis
+
+DECL gv_x : buf<32, int<64>> = null
+DECL gv_y : buf<32, int<64>> = null
+
+# deterministic circular layout: node 0 (the primary) at the centre
+FUNC graph_layout(cx : int<64>, cy : int<64>, rad : int<64>) {
+    IF g_node_n == 0 {
+        RETURN 0
+    }
+    gv_x[0] = cx
+    gv_y[0] = cy
+    DECL i : int<64> = 1
+    WHILE i < g_node_n {
+        DECL a : float<64> = (i - 1) * 2.0 * OC_PI / (g_node_n - 1)
+        gv_x[i] = cx + (rad * cos(a)) //// 1
+        gv_y[i] = cy + (rad * sin(a)) //// 1
+        i = i + 1
+    }
+    RETURN g_node_n
+}
+
+# is edge (a,b) on the cheapest route to `dst`?
+FUNC graph_on_route(a : int<64>, b : int<64>, dst : int<64>) : int<64> {
+    DECL cur : int<64> = dst
+    DECL guard : int<64> = 0
+    WHILE cur >= 0 {
+        DECL pv : int<64> = mt_prev[cur]
+        IF pv < 0 {
+            RETURN 0
+        }
+        IF pv == a {
+            IF cur == b {
+                RETURN 1
+            }
+        }
+        IF pv == b {
+            IF cur == a {
+                RETURN 1
+            }
+        }
+        cur = pv
+        guard = guard + 1
+        IF guard > 64 {
+            RETURN 0
+        }
+    }
+    RETURN 0
+}
+
+FUNC graph_draw(x : int<64>, y : int<64>, w : int<64>, h : int<64>, highlight : int<64>) : int<64> {
+    IF g_node_n == 0 {
+        RETURN 0
+    }
+    DECL cx : int<64> = x + w //// 2
+    DECL cy : int<64> = y + h //// 2 + 6
+    DECL rad : int<64> = h //// 2 - 44
+    graph_layout(cx, cy, rad)
+    fb_text(x + 4, y + 2, strbuf("METASTATIC ROUTE GRAPH"), 1, 225, 230, 240)
+
+    # ---- edges
+    DECL e : int<64> = 0
+    WHILE e < g_edge_n {
+        DECL a : int<64> = g_edge_a[e]
+        DECL b : int<64> = g_edge_b[e]
+        DECL onr : int<64> = graph_on_route(a, b, highlight)
+        IF onr == 1 {
+            fb_line(gv_x[a], gv_y[a] - 1, gv_x[b], gv_y[b] - 1, 255, 170, 60)
+            fb_line(gv_x[a], gv_y[a], gv_x[b], gv_y[b], 255, 196, 90)
+            fb_line(gv_x[a], gv_y[a] + 1, gv_x[b], gv_y[b] + 1, 255, 170, 60)
+            fb_line(gv_x[a] + 1, gv_y[a], gv_x[b] + 1, gv_y[b], 255, 196, 90)
+        } ELSE {
+            DECL sh : int<64> = oc_iclamp(150 - g_edge_w[e] * 8.0 //// 1, 50, 150)
+            fb_line(gv_x[a], gv_y[a], gv_x[b], gv_y[b], sh, sh + 6, sh + 20)
+        }
+        # weight label at the edge midpoint
+        fb_text((gv_x[a] + gv_x[b]) //// 2 - 4, (gv_y[a] + gv_y[b]) //// 2 - 4, oc_ftoa(g_edge_w[e], 0), 1, 120, 128, 145)
+        e = e + 1
+    }
+    # ---- nodes
+    DECL i : int<64> = 0
+    WHILE i < g_node_n {
+        ramp(mt_prob[i])
+        DECL r : int<64> = 14
+        IF i == 0 {
+            r = 18
+        }
+        fb_circle(gv_x[i], gv_y[i], r, ramp_r, ramp_g, ramp_b, 1)
+        fb_circle(gv_x[i], gv_y[i], r, 235, 240, 250, 0)
+        IF i == highlight {
+            fb_circle(gv_x[i], gv_y[i], r + 4, 255, 170, 60, 0)
+        }
+        DECL nm : buf<> = oc_node_name(i)
+        fb_text(gv_x[i] - fb_text_w(nm, 1) //// 2, gv_y[i] + r + 4, nm, 1, 210, 216, 228)
+        fb_text(gv_x[i] - 10, gv_y[i] - 3, oc_ftoa(mt_prob[i], 2), 1, 16, 18, 24)
+        i = i + 1
+    }
+    RETURN g_node_n
+}

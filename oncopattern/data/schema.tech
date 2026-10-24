@@ -1,0 +1,216 @@
+# ============================================================================
+# oncopattern/data/schema.tech — the typed data schema registry.
+#
+# Every dataset OncoPattern can hold lives here as a global typed buffer.
+# Machine contract 4: typed buffers must be GLOBAL (a local `buf<N,T>` faults
+# the machine), so the schema is the single place they are declared, and the
+# ingest modules fill them in.
+#
+# META @module(name:schema, provides:oc_schema, requires:constants)
+# ============================================================================
+
+IMPORT oncopattern/core/constants
+
+# ------------------------------------------------------------- capacities
+DECL OC_MAX_VAR   : int<64> = 1400      # variant records
+DECL OC_MAX_CELL  : int<64> = 1024      # CSV cells
+DECL OC_MAX_GENE  : int<64> = 64
+DECL OC_MAX_SAMP  : int<64> = 16
+DECL OC_MAX_NODE  : int<64> = 32        # organ-topology nodes
+DECL OC_MAX_EDGE  : int<64> = 128
+DECL OC_MAX_PX    : int<64> = 16384     # 128*128 image
+DECL OC_MAX_QUAR  : int<64> = 64
+
+# ------------------------------------------------- variants (VCF)  schema
+#   data<chrom:int<8>, pos:int<64>, ref:int<8>, alt:int<8>, qual:float<64>>
+DECL g_var_chrom : buf<1400, int<64>> = null
+DECL g_var_pos   : buf<1400, int<64>> = null
+DECL g_var_ref   : buf<1400, int<64>> = null   # base code A0 C1 G2 T3
+DECL g_var_alt   : buf<1400, int<64>> = null
+DECL g_var_qual  : buf<1400, float<64>> = null
+DECL g_var_depth : buf<1400, int<64>> = null
+DECL g_var_n     : int<64> = 0
+
+# ------------------------------------------------------------- quarantine
+# Invalid rows are NEVER silently dropped (plan section 9) — they are moved
+# here with a machine-readable reason code.
+DECL OC_Q_OK        : int<64> = 0
+DECL OC_Q_POS       : int<64> = 1       # position out of range
+DECL OC_Q_QUAL      : int<64> = 2       # negative / non-numeric quality
+DECL OC_Q_CHROM     : int<64> = 3       # chromosome out of range
+DECL OC_Q_BASE      : int<64> = 4       # bad ref/alt allele
+DECL OC_Q_RANGE     : int<64> = 5       # numeric field out of schema range
+DECL g_quar_reason : buf<64, int<64>> = null
+DECL g_quar_line   : buf<64, int<64>> = null
+DECL g_quar_field  : buf<64, int<64>> = null
+DECL g_quar_n      : int<64> = 0
+
+# ------------------------------------------------------------- CSV tables
+# ---- clinical metadata for the active patient.
+# Captured at ingest time: the CSV reader is a single shared parser, so
+# loading expression.csv afterwards overwrites its cell table.  Declared here,
+# with the rest of the ingested state, so every later layer can read it
+# (the compiler is single-pass: a global must be declared before any use).
+# number of expected input files that could not be read this run
+DECL g_missing : int<64> = 0
+
+DECL g_pid    : buf<32> = null
+DECL g_pid_n  : int<64> = 0
+DECL g_pct    : int<64> = 0        # cancer type id
+DECL g_pstage : int<64> = 0
+DECL g_page   : int<64> = 0
+
+DECL g_csv_src  : buf<> = null
+DECL g_csv_off  : buf<1024, int<64>> = null    # cell start offset in g_csv_src
+DECL g_csv_len  : buf<1024, int<64>> = null    # cell length in bytes
+DECL g_csv_num  : buf<1024, float<64>> = null  # numeric value (0 if textual)
+DECL g_csv_isnum: buf<1024, int<64>> = null
+DECL g_csv_rows : int<64> = 0
+DECL g_csv_cols : int<64> = 0
+
+# --------------------------------------------------- gene expression matrix
+DECL g_expr      : buf<1024, float<64>> = null   # genes x samples, row-major
+DECL g_expr_g    : int<64> = 0
+DECL g_expr_s    : int<64> = 0
+DECL g_gene_off  : buf<64, int<64>> = null       # gene name -> offset in src
+DECL g_gene_len  : buf<64, int<64>> = null
+
+# ------------------------------------------------------------ organ graph
+DECL g_node_n    : int<64> = 0
+DECL g_node_off  : buf<32, int<64>> = null
+DECL g_node_len  : buf<32, int<64>> = null
+DECL g_edge_a    : buf<128, int<64>> = null
+DECL g_edge_b    : buf<128, int<64>> = null
+DECL g_edge_w    : buf<128, float<64>> = null
+DECL g_edge_n    : int<64> = 0
+DECL g_json_src  : buf<> = null
+
+# ---------------------------------------------------------- pathology image
+DECL g_img    : buf<16384> = null       # 8-bit grey, row-major
+DECL g_img_w  : int<64> = 0
+DECL g_img_h  : int<64> = 0
+
+# ---------------------------------------------------------- clinical table
+DECL g_clin_rows : int<64> = 0
+
+# ===========================================================================
+# schema accessors
+# ===========================================================================
+
+FUNC oc_cell(row : int<64>, col : int<64>) : int<64> {
+    RETURN row * g_csv_cols + col
+}
+
+FUNC oc_cell_num(row : int<64>, col : int<64>) : float<64> {
+    RETURN g_csv_num[row * g_csv_cols + col]
+}
+
+# printable text of a CSV cell
+FUNC oc_cell_txt(row : int<64>, col : int<64>) : buf<> {
+    DECL k : int<64> = row * g_csv_cols + col
+    RETURN slice(g_csv_src, g_csv_off[k], g_csv_len[k])
+}
+
+FUNC oc_expr_at(gene : int<64>, samp : int<64>) : float<64> {
+    RETURN g_expr[gene * g_expr_s + samp]
+}
+
+FUNC oc_gene_name(g : int<64>) : buf<> {
+    RETURN slice(g_csv_src, g_gene_off[g], g_gene_len[g])
+}
+
+FUNC oc_node_name(n : int<64>) : buf<> {
+    RETURN slice(g_json_src, g_node_off[n], g_node_len[n])
+}
+
+FUNC oc_px(x : int<64>, y : int<64>) : int<64> {
+    IF x < 0 {
+        RETURN 0
+    }
+    IF y < 0 {
+        RETURN 0
+    }
+    IF x >= g_img_w {
+        RETURN 0
+    }
+    IF y >= g_img_h {
+        RETURN 0
+    }
+    RETURN g_img[y * g_img_w + x]
+}
+
+# base code -> ASCII letter
+FUNC oc_base_ch(code : int<64>) : int<64> {
+    IF code == 0 {
+        RETURN 65
+    }
+    IF code == 1 {
+        RETURN 67
+    }
+    IF code == 2 {
+        RETURN 71
+    }
+    RETURN 84
+}
+
+FUNC oc_base_code(ch : int<64>) : int<64> {
+    IF ch == 65 {
+        RETURN 0
+    }
+    IF ch == 67 {
+        RETURN 1
+    }
+    IF ch == 71 {
+        RETURN 2
+    }
+    IF ch == 84 {
+        RETURN 3
+    }
+    RETURN -1
+}
+
+# record a quarantined row
+FUNC oc_quarantine(line : int<64>, field : int<64>, reason : int<64>) {
+    IF g_quar_n < OC_MAX_QUAR {
+        g_quar_line[g_quar_n] = line
+        g_quar_field[g_quar_n] = field
+        g_quar_reason[g_quar_n] = reason
+        g_quar_n = g_quar_n + 1
+    }
+}
+
+FUNC oc_quar_reason_txt(code : int<64>) : buf<> {
+    MATCH code {
+        CASE 1 {
+            RETURN strbuf("position out of range")
+        }
+        CASE 2 {
+            RETURN strbuf("invalid quality score")
+        }
+        CASE 3 {
+            RETURN strbuf("chromosome out of range")
+        }
+        CASE 4 {
+            RETURN strbuf("invalid allele")
+        }
+        CASE 5 {
+            RETURN strbuf("value out of schema range")
+        }
+        ELSE {
+            RETURN strbuf("ok")
+        }
+    }
+}
+
+FUNC oc_schema_reset() {
+    g_var_n = 0
+    g_quar_n = 0
+    g_csv_rows = 0
+    g_csv_cols = 0
+    g_expr_g = 0
+    g_expr_s = 0
+    g_node_n = 0
+    g_edge_n = 0
+    g_img_w = 0
+    g_img_h = 0
+}

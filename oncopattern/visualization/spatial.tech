@@ -1,0 +1,164 @@
+# ============================================================================
+# oncopattern/visualization/spatial.tech — 2-D scalar field maps.
+#
+# Renders any of the simulation grids (nutrient, VEGF, vessel density,
+# temperature, dose, migrating-cell density) as a colour-mapped image with an
+# optional iso-contour — e.g. the 60 degC ablation boundary, which is the
+# clinically meaningful line on a thermal map.
+#
+# META @module(name:vis_spatial, provides:spatial_draw, requires:vis_renderer)
+# ============================================================================
+
+IMPORT oncopattern/visualization/renderer
+IMPORT oncopattern/pattern/physical
+
+DECL SP_NUTRIENT : int<64> = 0
+DECL SP_VESSEL   : int<64> = 1
+DECL SP_VEGF     : int<64> = 2
+DECL SP_TEMP     : int<64> = 3
+DECL SP_DOSE     : int<64> = 4
+DECL SP_MIGRATE  : int<64> = 5
+
+DECL sp_min : float<64> = 0.0
+DECL sp_max : float<64> = 1.0
+
+FUNC sp_value(field : int<64>, k : int<64>) : float<64> {
+    IF field == SP_NUTRIENT {
+        RETURN f_C[k]
+    }
+    IF field == SP_VESSEL {
+        RETURN f_E[k]
+    }
+    IF field == SP_VEGF {
+        RETURN f_G[k]
+    }
+    IF field == SP_TEMP {
+        RETURN ph_T[k]
+    }
+    IF field == SP_DOSE {
+        RETURN ph_D[k]
+    }
+    RETURN ph_M[k]
+}
+
+FUNC sp_field_name(field : int<64>) : buf<> {
+    MATCH field {
+        CASE 0 {
+            RETURN strbuf("NUTRIENT / OXYGEN FIELD")
+        }
+        CASE 1 {
+            RETURN strbuf("VESSEL DENSITY (ANGIOGENESIS)")
+        }
+        CASE 2 {
+            RETURN strbuf("VEGF CONCENTRATION")
+        }
+        CASE 3 {
+            RETURN strbuf("TEMPERATURE FIELD (ABLATION)")
+        }
+        CASE 4 {
+            RETURN strbuf("RADIATION DOSE MAP")
+        }
+        ELSE {
+            RETURN strbuf("MIGRATING CELL DENSITY")
+        }
+    }
+}
+
+FUNC sp_scan(field : int<64>) {
+    sp_min = 1000000000.0
+    sp_max = -1000000000.0
+    DECL i : int<64> = 0
+    WHILE i < PNN {
+        DECL v : float<64> = sp_value(field, i)
+        IF v < sp_min {
+            sp_min = v
+        }
+        IF v > sp_max {
+            sp_max = v
+        }
+        i = i + 1
+    }
+    IF sp_max - sp_min < OC_EPS {
+        sp_max = sp_min + 1.0
+    }
+}
+
+# Draw the field into (x,y,w,h).  `iso` > 0 overlays that iso-contour.
+FUNC spatial_draw(x : int<64>, y : int<64>, w : int<64>, h : int<64>, field : int<64>, iso : float<64>) : int<64> {
+    sp_scan(field)
+    DECL side : int<64> = w
+    IF h - 26 < side {
+        side = h - 26
+    }
+    DECL cell : int<64> = side //// PN
+    IF cell < 1 {
+        cell = 1
+    }
+    DECL ox : int<64> = x + 4
+    DECL oy : int<64> = y + 14
+    fb_text(x + 4, y + 2, sp_field_name(field), 1, 225, 230, 240)
+    DECL i : int<64> = 0
+    WHILE i < PN {
+        DECL j : int<64> = 0
+        WHILE j < PN {
+            DECL v : float<64> = sp_value(field, i * PN + j)
+            DECL t : float<64> = (v - sp_min) / (sp_max - sp_min)
+            IF field == SP_TEMP {
+                ramp_heat(t)
+            } ELSE {
+                ramp(t)
+            }
+            fb_rect(ox + j * cell, oy + i * cell, cell, cell, ramp_r, ramp_g, ramp_b)
+            j = j + 1
+        }
+        i = i + 1
+    }
+    # iso-contour: mark cells that straddle the threshold
+    IF iso > 0.0 {
+        DECL i2 : int<64> = 1
+        WHILE i2 < PN - 1 {
+            DECL j2 : int<64> = 1
+            WHILE j2 < PN - 1 {
+                DECL c : float<64> = sp_value(field, i2 * PN + j2)
+                DECL rgt : float<64> = sp_value(field, i2 * PN + j2 + 1)
+                DECL dwn : float<64> = sp_value(field, (i2 + 1) * PN + j2)
+                DECL cross : int<64> = 0
+                IF c >= iso {
+                    IF rgt < iso {
+                        cross = 1
+                    }
+                    IF dwn < iso {
+                        cross = 1
+                    }
+                } ELSE {
+                    IF rgt >= iso {
+                        cross = 1
+                    }
+                    IF dwn >= iso {
+                        cross = 1
+                    }
+                }
+                IF cross == 1 {
+                    fb_rect(ox + j2 * cell, oy + i2 * cell, cell, cell, 255, 255, 255)
+                }
+                j2 = j2 + 1
+            }
+            i2 = i2 + 1
+        }
+    }
+    fb_frame(ox, oy, PN * cell, PN * cell, 90, 100, 120)
+    # scale bar
+    DECL bx : int<64> = ox + PN * cell + 8
+    DECL k : int<64> = 0
+    WHILE k < PN * cell {
+        ramp((PN * cell - k) / (PN * cell))
+        IF field == SP_TEMP {
+            ramp_heat((PN * cell - k) / (PN * cell))
+        }
+        fb_rect(bx, oy + k, 8, 1, ramp_r, ramp_g, ramp_b)
+        k = k + 1
+    }
+    fb_text(bx + 11, oy - 2, oc_ftoa(sp_max, 2), 1, 190, 196, 210)
+    fb_text(bx + 11, oy + PN * cell - 6, oc_ftoa(sp_min, 2), 1, 190, 196, 210)
+    RETURN cell
+}

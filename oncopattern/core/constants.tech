@@ -1,0 +1,510 @@
+# ============================================================================
+# oncopattern/core/constants.tech
+#
+# Layer 0 — physical constants, medical thresholds, and the byte-level
+# utility belt every other module builds on.
+#
+# Why the utilities live here: TECH's `str<>` values do not support byte
+# indexing and `+` does not concatenate strings (machine contract 10), so ALL
+# text construction in OncoPattern — reports, SVG, HTML, log records — is done
+# by appending into raw `buf<>` byte buffers through oc_cat/oc_cati/oc_catf.
+#
+# META @module(name:constants, provides:oc_util, requires:none)
+# ============================================================================
+
+# ------------------------------------------------------------- mathematical
+DECL OC_PI      : float<64> = 3.141592653589793
+DECL OC_E       : float<64> = 2.718281828459045
+DECL OC_EPS     : float<64> = 0.000000000001
+
+# ------------------------------------------------------------ medical / bio
+# Tumour mutational burden: mutations per megabase.  >= 10 is the widely used
+# "TMB-high" cut-off for checkpoint-inhibitor eligibility.
+DECL OC_TMB_HIGH        : float<64> = 10.0
+DECL OC_TMB_INTERMED    : float<64> = 5.0
+# Microsatellite instability score (fraction of unstable loci).
+DECL OC_MSI_HIGH        : float<64> = 0.30
+# SNV cluster: minimum variants inside the sliding window to call a hotspot.
+DECL OC_SNV_WIN         : int<64>   = 5000
+DECL OC_SNV_MIN         : int<64>   = 25
+# Copy-number log2 ratio thresholds (gain / loss).
+DECL OC_CNV_GAIN        : float<64> = 0.30
+DECL OC_CNV_LOSS        : float<64> = -0.30
+# Histology
+DECL OC_NUCLEUS_MIN     : int<64>   = 200   # grey level of a stained nucleus
+DECL OC_NECROSIS_MAX    : int<64>   = 45    # grey level of necrotic tissue
+DECL OC_TUMOUR_MIN      : int<64>   = 120   # grey level of tumour sheet
+# Comparison engine classification bands (percent change).
+DECL OC_DELTA_MATCH     : float<64> = 5.0
+DECL OC_DELTA_MINOR     : float<64> = 20.0
+
+# ------------------------------------------------------------------ physics
+DECL OC_BODY_TEMP       : float<64> = 37.0    # degC
+DECL OC_ABLATION_TEMP   : float<64> = 60.0    # degC, coagulative necrosis
+DECL OC_BLOOD_RHO_C     : float<64> = 3617.0  # J/(m^3 K) blood
+DECL OC_TISSUE_K        : float<64> = 0.5     # W/(m K) thermal conductivity
+
+# ------------------------------------------------------------- scratch pads
+DECL oc_numbuf : buf<64> = null
+
+# ===========================================================================
+# byte helpers
+# ===========================================================================
+
+# append src into dst at offset `at`; returns the new offset
+# ---------------------------------------------------------------------------
+# Project identity.  Every artefact the platform writes carries these, so a
+# report or an exported figure can be traced back to the build that made it.
+# ---------------------------------------------------------------------------
+FUNC oc_project() : buf<> {
+    RETURN strbuf("OncoPattern")
+}
+
+FUNC oc_version() : buf<> {
+    RETURN strbuf("1.0")
+}
+
+FUNC oc_author() : buf<> {
+    RETURN strbuf("K-S (Kanishk-Soni)")
+}
+
+FUNC oc_company() : buf<> {
+    RETURN strbuf("ESS KS Life Tech")
+}
+
+FUNC oc_repo() : buf<> {
+    RETURN strbuf("https://github.com/esskslifetech/OncoPattern")
+}
+
+FUNC oc_cat(dst : buf<>, at : int<64>, src : buf<>) : int<64> {
+    DECL i : int<64> = 0
+    DECL n : int<64> = len(src)
+    WHILE i < n {
+        dst[at + i] = src[i]
+        i = i + 1
+    }
+    RETURN at + n
+}
+
+# append a single byte
+FUNC oc_catb(dst : buf<>, at : int<64>, b : int<64>) : int<64> {
+    dst[at] = b
+    RETURN at + 1
+}
+
+# integer -> decimal byte buffer
+FUNC oc_itoa(v : int<64>) : buf<> {
+    IF v == 0 {
+        RETURN slice(strbuf("0"), 0, 1)
+    }
+    DECL neg : int<64> = 0
+    IF v < 0 {
+        neg = 1
+        v = 0 - v
+    }
+    DECL p : int<64> = 32
+    WHILE v > 0 {
+        p = p - 1
+        oc_numbuf[p] = 48 + (v % 10)
+        v = v //// 10
+    }
+    IF neg == 1 {
+        p = p - 1
+        oc_numbuf[p] = 45
+    }
+    RETURN slice(oc_numbuf, p, 32 - p)
+}
+
+# append an integer
+FUNC oc_cati(dst : buf<>, at : int<64>, v : int<64>) : int<64> {
+    RETURN oc_cat(dst, at, oc_itoa(v))
+}
+
+# float -> fixed-point text with `dec` decimals (half-up rounding).
+# TECH has no printf; this is the only float formatter in the system.
+FUNC oc_ftoa(v : float<64>, dec : int<64>) : buf<> {
+    DECL neg : int<64> = 0
+    IF v < 0.0 {
+        neg = 1
+        v = 0.0 - v
+    }
+    DECL scale : float<64> = 1.0
+    DECL k : int<64> = 0
+    WHILE k < dec {
+        scale = scale * 10.0
+        k = k + 1
+    }
+    # round half up, then split into integer and fractional digits
+    DECL scaled : int<64> = (v * scale + 0.5) //// 1
+    DECL ip : int<64> = scaled //// (scale //// 1)
+    DECL fp : int<64> = scaled - ip * (scale //// 1)
+    DECL p : int<64> = 40
+    DECL d : int<64> = 0
+    WHILE d < dec {
+        p = p - 1
+        oc_numbuf[p] = 48 + (fp % 10)
+        fp = fp //// 10
+        d = d + 1
+    }
+    IF dec > 0 {
+        p = p - 1
+        oc_numbuf[p] = 46
+    }
+    IF ip == 0 {
+        p = p - 1
+        oc_numbuf[p] = 48
+    }
+    WHILE ip > 0 {
+        p = p - 1
+        oc_numbuf[p] = 48 + (ip % 10)
+        ip = ip //// 10
+    }
+    IF neg == 1 {
+        p = p - 1
+        oc_numbuf[p] = 45
+    }
+    RETURN slice(oc_numbuf, p, 40 - p)
+}
+
+# append a float with `dec` decimals
+FUNC oc_catf(dst : buf<>, at : int<64>, v : float<64>, dec : int<64>) : int<64> {
+    RETURN oc_cat(dst, at, oc_ftoa(v, dec))
+}
+
+# append a newline
+FUNC oc_nl(dst : buf<>, at : int<64>) : int<64> {
+    dst[at] = 10
+    RETURN at + 1
+}
+
+# pad with spaces up to column `col` (ASCII table layout)
+FUNC oc_pad(dst : buf<>, at : int<64>, start : int<64>, col : int<64>) : int<64> {
+    DECL w : int<64> = at - start
+    WHILE w < col {
+        dst[at] = 32
+        at = at + 1
+        w = w + 1
+    }
+    RETURN at
+}
+
+# repeat a byte n times (rules, bar charts)
+FUNC oc_rep(dst : buf<>, at : int<64>, ch : int<64>, n : int<64>) : int<64> {
+    DECL i : int<64> = 0
+    WHILE i < n {
+        dst[at + i] = ch
+        i = i + 1
+    }
+    RETURN at + n
+}
+
+# ===========================================================================
+# scanning / parsing helpers (used by every ingest module)
+# ===========================================================================
+
+FUNC oc_is_digit(c : int<64>) : int<64> {
+    IF c >= 48 {
+        IF c <= 57 {
+            RETURN 1
+        }
+    }
+    RETURN 0
+}
+
+# find byte `ch` in b starting at `from`, stopping at `end`; -1 if absent
+FUNC oc_find(b : buf<>, from : int<64>, end : int<64>, ch : int<64>) : int<64> {
+    DECL i : int<64> = from
+    WHILE i < end {
+        IF b[i] == ch {
+            RETURN i
+        }
+        i = i + 1
+    }
+    RETURN -1
+}
+
+# is this byte a space / tab / CR / LF ?
+FUNC oc_is_ws(c : int<64>) : int<64> {
+    IF c == 32 {
+        RETURN 1
+    }
+    IF c == 9 {
+        RETURN 1
+    }
+    IF c == 10 {
+        RETURN 1
+    }
+    IF c == 13 {
+        RETURN 1
+    }
+    RETURN 0
+}
+
+# first non-whitespace offset in [from, end)
+FUNC oc_skip_ws(b : buf<>, from : int<64>, end : int<64>) : int<64> {
+    WHILE from < end {
+        IF oc_is_ws(b[from]) == 1 {
+            from = from + 1
+        } ELSE {
+            RETURN from
+        }
+    }
+    RETURN end
+}
+
+# parse a (possibly signed) integer from b[from..end); leading whitespace is
+# skipped, the first non-digit terminates the number
+FUNC oc_atoi(b : buf<>, from : int<64>, end : int<64>) : int<64> {
+    DECL i : int<64> = oc_skip_ws(b, from, end)
+    DECL neg : int<64> = 0
+    DECL v : int<64> = 0
+    IF i < end {
+        IF b[i] == 45 {
+            neg = 1
+            i = i + 1
+        }
+    }
+    WHILE i < end {
+        IF oc_is_digit(b[i]) == 1 {
+            v = v * 10 + (b[i] - 48)
+            i = i + 1
+        } ELSE {
+            i = end
+        }
+    }
+    IF neg == 1 {
+        RETURN 0 - v
+    }
+    RETURN v
+}
+
+# parse a decimal float from b[from..end)  (no exponent form — the TECH lexer
+# has none either, so the data files never contain one)
+FUNC oc_atof(b : buf<>, from : int<64>, end : int<64>) : float<64> {
+    DECL i : int<64> = oc_skip_ws(b, from, end)
+    DECL start : int<64> = i
+    DECL neg : int<64> = 0
+    DECL v : float<64> = 0.0
+    IF i < end {
+        IF b[i] == 45 {
+            neg = 1
+            i = i + 1
+        }
+    }
+    WHILE i < end {
+        IF oc_is_digit(b[i]) == 1 {
+            v = v * 10.0 + (b[i] - 48)
+            i = i + 1
+        } ELSE {
+            i = end
+        }
+    }
+    # fractional part
+    DECL dot : int<64> = oc_find(b, start, end, 46)
+    IF dot >= 0 {
+        DECL f : float<64> = 0.1
+        DECL j : int<64> = dot + 1
+        WHILE j < end {
+            IF oc_is_digit(b[j]) == 1 {
+                v = v + (b[j] - 48) * f
+                f = f * 0.1
+                j = j + 1
+            } ELSE {
+                j = end
+            }
+        }
+    }
+    IF neg == 1 {
+        RETURN 0.0 - v
+    }
+    RETURN v
+}
+
+# byte-range equality against a literal
+FUNC oc_eq(b : buf<>, from : int<64>, end : int<64>, lit : buf<>) : int<64> {
+    DECL n : int<64> = len(lit)
+    IF end - from != n {
+        RETURN 0
+    }
+    DECL i : int<64> = 0
+    WHILE i < n {
+        IF b[from + i] != lit[i] {
+            RETURN 0
+        }
+        i = i + 1
+    }
+    RETURN 1
+}
+
+# ===========================================================================
+# numeric helpers
+# ===========================================================================
+
+FUNC oc_fabs(v : float<64>) : float<64> {
+    IF v < 0.0 {
+        RETURN 0.0 - v
+    }
+    RETURN v
+}
+
+FUNC oc_fmin(a : float<64>, b : float<64>) : float<64> {
+    IF a < b {
+        RETURN a
+    }
+    RETURN b
+}
+
+FUNC oc_fmax(a : float<64>, b : float<64>) : float<64> {
+    IF a > b {
+        RETURN a
+    }
+    RETURN b
+}
+
+FUNC oc_iclamp(v : int<64>, lo : int<64>, hi : int<64>) : int<64> {
+    IF v < lo {
+        RETURN lo
+    }
+    IF v > hi {
+        RETURN hi
+    }
+    RETURN v
+}
+
+# safe division: returns 0 when the denominator vanishes
+FUNC oc_div(a : float<64>, b : float<64>) : float<64> {
+    IF oc_fabs(b) < OC_EPS {
+        RETURN 0.0
+    }
+    RETURN a / b
+}
+
+# percent change of a against baseline b
+FUNC oc_pct(a : float<64>, b : float<64>) : float<64> {
+    RETURN oc_div((a - b) * 100.0, b)
+}
+
+# a compact printable checksum: first 8 hex chars of sha256 over a byte range
+DECL oc_hexdig : buf<16> = null
+
+FUNC oc_hex8(b : buf<>) : buf<> {
+    oc_hexdig[0] = 48
+    DECL h : buf<> = sha256(b)
+    DECL out : buf<> = strbuf("00000000")
+    DECL i : int<64> = 0
+    WHILE i < 4 {
+        DECL v : int<64> = h[i]
+        DECL hi : int<64> = v //// 16
+        DECL lo : int<64> = v % 16
+        IF hi < 10 {
+            out[i * 2] = 48 + hi
+        } ELSE {
+            out[i * 2] = 87 + hi
+        }
+        IF lo < 10 {
+            out[i * 2 + 1] = 48 + lo
+        } ELSE {
+            out[i * 2 + 1] = 87 + lo
+        }
+        i = i + 1
+    }
+    RETURN out
+}
+
+# ---------------------------------------------------------------------------
+# Comparison helpers.  A comparison is a statement-level construct in TECH, so
+# tests and guards that need a boolean *value* (to pass as an argument) go
+# through these.
+# ---------------------------------------------------------------------------
+FUNC oc_gt0(v : int<64>) : int<64> {
+    IF v > 0 {
+        RETURN 1
+    }
+    RETURN 0
+}
+
+FUNC oc_gt(a : float<64>, b : float<64>) : int<64> {
+    IF a > b {
+        RETURN 1
+    }
+    RETURN 0
+}
+
+FUNC oc_ge(a : float<64>, b : float<64>) : int<64> {
+    IF a >= b {
+        RETURN 1
+    }
+    RETURN 0
+}
+
+FUNC oc_lt(a : float<64>, b : float<64>) : int<64> {
+    IF a < b {
+        RETURN 1
+    }
+    RETURN 0
+}
+
+FUNC oc_near(a : float<64>, b : float<64>, tol : float<64>) : int<64> {
+    IF oc_fabs(a - b) <= tol {
+        RETURN 1
+    }
+    RETURN 0
+}
+
+FUNC oc_and(a : int<64>, b : int<64>) : int<64> {
+    IF a == 1 {
+        IF b == 1 {
+            RETURN 1
+        }
+    }
+    RETURN 0
+}
+
+FUNC oc_iabs(v : int<64>) : int<64> {
+    IF v < 0 {
+        RETURN 0 - v
+    }
+    RETURN v
+}
+
+# substring search: 1 when `needle` occurs in `hay`
+FUNC oc_has(hay : buf<>, needle : buf<>) : int<64> {
+    DECL n : int<64> = len(needle)
+    DECL m : int<64> = len(hay)
+    IF n == 0 {
+        RETURN 1
+    }
+    DECL i : int<64> = 0
+    WHILE i + n <= m {
+        DECL j : int<64> = 0
+        DECL ok : int<64> = 1
+        WHILE j < n {
+            IF hay[i + j] != needle[j] {
+                ok = 0
+                j = n
+            } ELSE {
+                j = j + 1
+            }
+        }
+        IF ok == 1 {
+            RETURN 1
+        }
+        i = i + 1
+    }
+    RETURN 0
+}
+
+# byte-for-byte buffer equality
+FUNC oc_same(a : buf<>, b : buf<>) : int<64> {
+    IF len(a) != len(b) {
+        RETURN 0
+    }
+    DECL i : int<64> = 0
+    WHILE i < len(a) {
+        IF a[i] != b[i] {
+            RETURN 0
+        }
+        i = i + 1
+    }
+    RETURN 1
+}

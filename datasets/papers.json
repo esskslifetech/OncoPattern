@@ -1,0 +1,659 @@
+{
+ "source": "Europe PMC REST (EMBL-EBI) europepmc.org",
+ "retrieved": "2026-08-23",
+ "n_refs": 24,
+ "n_matched": 24,
+ "n_genes": 40,
+ "n_years": 15,
+ "year0": 2010,
+ "refs": [
+  {
+   "matched": 1,
+   "hits": 843,
+   "pmid": "30643254",
+   "doi": "10.1038/s41588-018-0312-8",
+   "title": "Tumor mutational load predicts survival after immunotherapy across multiple cancer types.",
+   "first_author": "Samstein RM",
+   "journal": "Nat Genet",
+   "year": 2019,
+   "cites": 3165,
+   "open_access": 0,
+   "key": "tmb",
+   "backs": "OC_TMB_HIGH = 10 mut/Mb",
+   "index": 0,
+   "query": "TITLE:tumor mutational burden OR TITLE:tumour mutational burden OR TITLE:mutational load"
+  },
+  {
+   "matched": 1,
+   "hits": 3822,
+   "pmid": "9823339",
+   "doi": "",
+   "title": "A National Cancer Institute Workshop on Microsatellite Instability for cancer detection and familial predisposition: dev",
+   "first_author": "Boland CR",
+   "journal": "Cancer Res",
+   "year": 1998,
+   "cites": 2862,
+   "open_access": 0,
+   "key": "msi",
+   "backs": "OC_MSI_HIGH microsatellite instability",
+   "index": 1,
+   "query": "TITLE:microsatellite instability"
+  },
+  {
+   "matched": 1,
+   "hits": 571,
+   "pmid": "23945592",
+   "doi": "10.1038/nature12477",
+   "title": "Signatures of mutational processes in human cancer.",
+   "first_author": "Alexandrov LB",
+   "journal": "Nature",
+   "year": 2013,
+   "cites": 7944,
+   "open_access": 1,
+   "key": "mutsig",
+   "backs": "detect_mutational_signature (NMF)",
+   "index": 2,
+   "query": "TITLE:mutational signatures OR TITLE:mutational processes"
+  },
+  {
+   "matched": 1,
+   "hits": 1468,
+   "pmid": "22300766",
+   "doi": "10.1101/gr.129684.111",
+   "title": "VarScan 2: somatic mutation and copy number alteration discovery in cancer by exome sequencing.",
+   "first_author": "Koboldt DC",
+   "journal": "Genome Res",
+   "year": 2012,
+   "cites": 4107,
+   "open_access": 0,
+   "key": "cnv",
+   "backs": "detect_cnv_segment",
+   "index": 3,
+   "query": "TITLE:copy number AND TITLE:cancer"
+  },
+  {
+   "matched": 1,
+   "hits": 631,
+   "pmid": "17453008",
+   "doi": "10.1038/sj.bjc.6603756",
+   "title": "Ki-67 as prognostic marker in early breast cancer: a meta-analysis of published studies involving 12;155 patients.",
+   "first_author": "de Azambuja E",
+   "journal": "Br J Cancer",
+   "year": 2007,
+   "cites": 699,
+   "open_access": 1,
+   "key": "ki67",
+   "backs": "detect_mitotic / proliferation index",
+   "index": 4,
+   "query": "TITLE:Ki-67 AND TITLE:prognostic"
+  },
+  {
+   "matched": 1,
+   "hits": 155,
+   "pmid": "2536582",
+   "doi": "10.1002/1097-0142(19890215)63:43.0.co;2-j",
+   "title": "Mammographically detected duct carcinoma in situ. Frequency of local recurrence following tylectomy and prognostic effec",
+   "first_author": "Lagios MD",
+   "journal": "Cancer",
+   "year": 1989,
+   "cites": 351,
+   "open_access": 0,
+   "key": "pleomorphism",
+   "backs": "detect_nuclear_pleomorphism",
+   "index": 5,
+   "query": "TITLE:nuclear pleomorphism OR (TITLE:nuclear grade AND TITLE:carcinoma)"
+  },
+  {
+   "matched": 1,
+   "hits": 151,
+   "pmid": "15973740",
+   "doi": "10.1002/cncr.21206",
+   "title": "Histologic coagulative tumor necrosis as a prognostic indicator of renal cell carcinoma aggressiveness.",
+   "first_author": "Sengupta S",
+   "journal": "Cancer",
+   "year": 2005,
+   "cites": 206,
+   "open_access": 0,
+   "key": "necrosis",
+   "backs": "detect_necrosis / OC_NECROSIS_MAX",
+   "index": 6,
+   "query": "(TITLE:tumour necrosis OR TITLE:tumor necrosis OR TITLE:coagulative necrosis) AND TITLE:pr"
+  },
+  {
+   "matched": 1,
+   "hits": 3001,
+   "pmid": "25214542",
+   "doi": "10.1093/annonc/mdu450",
+   "title": "The evaluation of tumor-infiltrating lymphocytes (TILs) in breast cancer: recommendations by an International TILs Worki",
+   "first_author": "Salgado R",
+   "journal": "Ann Oncol",
+   "year": 2015,
+   "cites": 2438,
+   "open_access": 0,
+   "key": "til",
+   "backs": "detect_til_gradient",
+   "index": 7,
+   "query": "TITLE:tumor-infiltrating lymphocytes OR TITLE:tumour-infiltrating lymphocytes"
+  },
+  {
+   "matched": 1,
+   "hits": 223,
+   "pmid": "20361254",
+   "doi": "10.1007/s10549-010-0855-6",
+   "title": "Tumor-stroma ratio in the primary tumor is a prognostic factor in early breast cancer patients; especially in triple-neg",
+   "first_author": "de Kruijf EM",
+   "journal": "Breast Cancer Res Treat",
+   "year": 2011,
+   "cites": 240,
+   "open_access": 0,
+   "key": "stroma",
+   "backs": "detect_tumor_stroma_ratio",
+   "index": 8,
+   "query": "TITLE:tumor-stroma ratio OR TITLE:tumour-stroma ratio OR TITLE:stroma ratio"
+  },
+  {
+   "matched": 1,
+   "hits": 869,
+   "pmid": "16116151",
+   "doi": "10.1200/jco.2005.05.516",
+   "title": "Lymphovascular invasion is independently associated with overall survival; cause-specific survival; and local and distan",
+   "first_author": "Lotan Y",
+   "journal": "J Clin Oncol",
+   "year": 2005,
+   "cites": 242,
+   "open_access": 0,
+   "key": "vascular",
+   "backs": "detect_vascular_invasion",
+   "index": 9,
+   "query": "TITLE:lymphovascular invasion"
+  },
+  {
+   "matched": 1,
+   "hits": 325,
+   "pmid": "25750242",
+   "doi": "10.1098/rstb.2014.0379",
+   "title": "Deciphering death: a commentary on Gompertz (1825) 'On the nature of the function expressive of the law of human mortali",
+   "first_author": "Kirkwood TB.",
+   "journal": "Philos Trans R Soc Lond B Biol Sci",
+   "year": 2015,
+   "cites": 669,
+   "open_access": 1,
+   "key": "gompertz",
+   "backs": "simulation/cell_growth growth_gompertz",
+   "index": 10,
+   "query": "TITLE:Gompertz"
+  },
+  {
+   "matched": 1,
+   "hits": 62,
+   "pmid": "25167199",
+   "doi": "10.1371/journal.pcbi.1003800",
+   "title": "Classical mathematical models for description and prediction of experimental tumor growth.",
+   "first_author": "Benzekry S",
+   "journal": "PLoS Comput Biol",
+   "year": 2014,
+   "cites": 318,
+   "open_access": 1,
+   "key": "logistic",
+   "backs": "simulation/cell_growth growth_logistic",
+   "index": 11,
+   "query": "(TITLE:mathematical models OR TITLE:mathematical model OR TITLE:universal law) AND (TITLE:"
+  },
+  {
+   "matched": 1,
+   "hits": 1795,
+   "pmid": "20929839",
+   "doi": "10.1126/science.1179047",
+   "title": "Reaction-diffusion model as a framework for understanding biological pattern formation.",
+   "first_author": "Kondo S",
+   "journal": "Science",
+   "year": 2010,
+   "cites": 888,
+   "open_access": 0,
+   "key": "diffusion",
+   "backs": "simulation/angiogenesis diffusion_2d",
+   "index": 12,
+   "query": "TITLE:reaction-diffusion OR (TITLE:glioma AND TITLE:invasion AND TITLE:model)"
+  },
+  {
+   "matched": 1,
+   "hits": 2776,
+   "pmid": "4938153",
+   "doi": "10.1056/nejm197111182852108",
+   "title": "Tumor angiogenesis: therapeutic implications.",
+   "first_author": "Folkman J.",
+   "journal": "N Engl J Med",
+   "year": 1971,
+   "cites": 5939,
+   "open_access": 0,
+   "key": "angiogenesis",
+   "backs": "simulation/angiogenesis VEGF sprouting",
+   "index": 13,
+   "query": "TITLE:tumor angiogenesis OR TITLE:tumour angiogenesis"
+  },
+  {
+   "matched": 1,
+   "hits": 975,
+   "pmid": "15170446",
+   "doi": "10.1038/nrc1367",
+   "title": "Exploiting tumour hypoxia in cancer treatment.",
+   "first_author": "Brown JM",
+   "journal": "Nat Rev Cancer",
+   "year": 2004,
+   "cites": 2033,
+   "open_access": 0,
+   "key": "hypoxia",
+   "backs": "g_hypoxic_frac / oxygen diffusion limit",
+   "index": 14,
+   "query": "TITLE:tumor hypoxia OR TITLE:tumour hypoxia"
+  },
+  {
+   "matched": 1,
+   "hits": 71,
+   "pmid": "3999709",
+   "doi": "10.1115/1.3138533",
+   "title": "A new simplified bioheat equation for the effect of blood flow on local average tissue temperature.",
+   "first_author": "Weinbaum S",
+   "journal": "J Biomech Eng",
+   "year": 1985,
+   "cites": 151,
+   "open_access": 0,
+   "key": "pennes",
+   "backs": "pattern/physical ablation_step (bio-heat)",
+   "index": 15,
+   "query": "(TITLE:bioheat OR TITLE:bio-heat OR TITLE:Pennes) AND (TITLE:tissue OR TITLE:thermal OR TI"
+  },
+  {
+   "matched": 1,
+   "hits": 277,
+   "pmid": "2670032",
+   "doi": "10.1259/0007-1285-62-740-679",
+   "title": "The linear-quadratic formula and progress in fractionated radiotherapy.",
+   "first_author": "Fowler JF.",
+   "journal": "Br J Radiol",
+   "year": 1989,
+   "cites": 1603,
+   "open_access": 0,
+   "key": "radiation",
+   "backs": "pattern/physical radiation_run",
+   "index": 16,
+   "query": "TITLE:linear-quadratic OR TITLE:linear quadratic"
+  },
+  {
+   "matched": 1,
+   "hits": 198,
+   "pmid": "4926701",
+   "doi": "10.1016/0022-5193(71)90050-6",
+   "title": "Model for chemotaxis.",
+   "first_author": "Keller EF",
+   "journal": "J Theor Biol",
+   "year": 1971,
+   "cites": 431,
+   "open_access": 0,
+   "key": "chemotaxis",
+   "backs": "pattern/physical chemotaxis_run (Keller-Segel)",
+   "index": 17,
+   "query": "TITLE:Keller-Segel OR TITLE:chemotaxis AND TITLE:model"
+  },
+  {
+   "matched": 1,
+   "hits": 107,
+   "pmid": "12409327",
+   "doi": "10.1200/jco.2002.03.100",
+   "title": "Phase I safety; pharmacokinetic; and pharmacodynamic trial of ZD1839; a selective oral epidermal growth factor receptor ",
+   "first_author": "Baselga J",
+   "journal": "J Clin Oncol",
+   "year": 2002,
+   "cites": 596,
+   "open_access": 0,
+   "key": "pkpd",
+   "backs": "simulation/drug_response PK/PD Emax",
+   "index": 18,
+   "query": "TITLE:pharmacokinetic AND TITLE:pharmacodynamic AND (TITLE:tumor OR TITLE:tumour OR TITLE:"
+  },
+  {
+   "matched": 1,
+   "hits": 211,
+   "pmid": "21436444",
+   "doi": "10.1126/science.1203486",
+   "title": "Cancer immunoediting: integrating immunity's roles in cancer suppression and promotion.",
+   "first_author": "Schreiber RD",
+   "journal": "Science",
+   "year": 2011,
+   "cites": 4425,
+   "open_access": 0,
+   "key": "immunoedit",
+   "backs": "simulation/immune_interaction Lotka-Volterra",
+   "index": 19,
+   "query": "TITLE:immunoediting"
+  },
+  {
+   "matched": 1,
+   "hits": 335,
+   "pmid": "12778135",
+   "doi": "10.1038/nrc1098",
+   "title": "The pathogenesis of cancer metastasis: the 'seed and soil' hypothesis revisited.",
+   "first_author": "Fidler IJ.",
+   "journal": "Nat Rev Cancer",
+   "year": 2003,
+   "cites": 3330,
+   "open_access": 0,
+   "key": "metastasis",
+   "backs": "simulation/metastasis organ tropism",
+   "index": 20,
+   "query": "TITLE:seed and soil OR TITLE:organ tropism OR TITLE:metastatic cascade"
+  },
+  {
+   "matched": 1,
+   "hits": 26,
+   "pmid": "17037977",
+   "doi": "10.1146/annurev.physchem.58.032806.104637",
+   "title": "Stochastic simulation of chemical kinetics.",
+   "first_author": "Gillespie DT.",
+   "journal": "Annu Rev Phys Chem",
+   "year": 2007,
+   "cites": 1013,
+   "open_access": 0,
+   "key": "ssa",
+   "backs": "simulation/stochastic Gillespie SSA",
+   "index": 21,
+   "query": "TITLE:stochastic simulation AND TITLE:chemical"
+  },
+  {
+   "matched": 1,
+   "hits": 63,
+   "pmid": "7288393",
+   "doi": "10.1085/jgp.78.4.431",
+   "title": "On connecting large vessels to small. The meaning of Murray's law.",
+   "first_author": "Sherman TF.",
+   "journal": "J Gen Physiol",
+   "year": 1981,
+   "cites": 318,
+   "open_access": 1,
+   "key": "murray",
+   "backs": "murray_parent_radius vascular branching",
+   "index": 22,
+   "query": "TITLE:Murray's law OR TITLE:Murray law"
+  },
+  {
+   "matched": 1,
+   "hits": 8,
+   "pmid": "9255794",
+   "doi": "10.1038/nbt0897-778",
+   "title": "Solid stress inhibits the growth of multicellular tumor spheroids.",
+   "first_author": "Helmlinger G",
+   "journal": "Nat Biotechnol",
+   "year": 1997,
+   "cites": 537,
+   "open_access": 0,
+   "key": "fea",
+   "backs": "pattern/physical stress_run (solid stress)",
+   "index": 23,
+   "query": "TITLE:solid stress AND TITLE:tumor"
+  }
+ ],
+ "genes": [
+  {
+   "term": "EGFR",
+   "index": 0,
+   "count": 21739
+  },
+  {
+   "term": "KRAS",
+   "index": 1,
+   "count": 7781
+  },
+  {
+   "term": "TP53",
+   "index": 2,
+   "count": 5055
+  },
+  {
+   "term": "MYC",
+   "index": 3,
+   "count": 10513
+  },
+  {
+   "term": "VEGFA",
+   "index": 4,
+   "count": 752
+  },
+  {
+   "term": "MKI67",
+   "index": 5,
+   "count": 28
+  },
+  {
+   "term": "CCND1",
+   "index": 6,
+   "count": 521
+  },
+  {
+   "term": "AURKA",
+   "index": 7,
+   "count": 373
+  },
+  {
+   "term": "PTEN",
+   "index": 8,
+   "count": 6661
+  },
+  {
+   "term": "RB1",
+   "index": 9,
+   "count": 820
+  },
+  {
+   "term": "BRCA1",
+   "index": 10,
+   "count": 8928
+  },
+  {
+   "term": "BRCA2",
+   "index": 11,
+   "count": 4276
+  },
+  {
+   "term": "ATM",
+   "index": 12,
+   "count": 2780
+  },
+  {
+   "term": "CDKN2A",
+   "index": 13,
+   "count": 1034
+  },
+  {
+   "term": "SMAD4",
+   "index": 14,
+   "count": 1094
+  },
+  {
+   "term": "APC",
+   "index": 15,
+   "count": 2739
+  },
+  {
+   "term": "ALK",
+   "index": 16,
+   "count": 4736
+  },
+  {
+   "term": "ROS1",
+   "index": 17,
+   "count": 933
+  },
+  {
+   "term": "MET",
+   "index": 18,
+   "count": 5851
+  },
+  {
+   "term": "ERBB2",
+   "index": 19,
+   "count": 2289
+  },
+  {
+   "term": "PIK3CA",
+   "index": 20,
+   "count": 1790
+  },
+  {
+   "term": "AKT1",
+   "index": 21,
+   "count": 906
+  },
+  {
+   "term": "MTOR",
+   "index": 22,
+   "count": 11349
+  },
+  {
+   "term": "STK11",
+   "index": 23,
+   "count": 341
+  },
+  {
+   "term": "KEAP1",
+   "index": 24,
+   "count": 1342
+  },
+  {
+   "term": "NFE2L2",
+   "index": 25,
+   "count": 116
+  },
+  {
+   "term": "CTNNB1",
+   "index": 26,
+   "count": 416
+  },
+  {
+   "term": "NOTCH1",
+   "index": 27,
+   "count": 1697
+  },
+  {
+   "term": "JAK2",
+   "index": 28,
+   "count": 2351
+  },
+  {
+   "term": "STAT3",
+   "index": 29,
+   "count": 9638
+  },
+  {
+   "term": "IL6",
+   "index": 30,
+   "count": 495
+  },
+  {
+   "term": "CD8A",
+   "index": 31,
+   "count": 24
+  },
+  {
+   "term": "PDCD1",
+   "index": 32,
+   "count": 60
+  },
+  {
+   "term": "CD274",
+   "index": 33,
+   "count": 124
+  },
+  {
+   "term": "FOXP3",
+   "index": 34,
+   "count": 1933
+  },
+  {
+   "term": "GZMB",
+   "index": 35,
+   "count": 24
+  },
+  {
+   "term": "PRF1",
+   "index": 36,
+   "count": 24
+  },
+  {
+   "term": "IFNG",
+   "index": 37,
+   "count": 75
+  },
+  {
+   "term": "TGFB1",
+   "index": 38,
+   "count": 146
+  },
+  {
+   "term": "COL1A1",
+   "index": 39,
+   "count": 181
+  }
+ ],
+ "velocity": [
+  {
+   "year": 2010,
+   "count": 116833
+  },
+  {
+   "year": 2011,
+   "count": 127876
+  },
+  {
+   "year": 2012,
+   "count": 142637
+  },
+  {
+   "year": 2013,
+   "count": 153624
+  },
+  {
+   "year": 2014,
+   "count": 171442
+  },
+  {
+   "year": 2015,
+   "count": 185014
+  },
+  {
+   "year": 2016,
+   "count": 194868
+  },
+  {
+   "year": 2017,
+   "count": 208419
+  },
+  {
+   "year": 2018,
+   "count": 222281
+  },
+  {
+   "year": 2019,
+   "count": 244252
+  },
+  {
+   "year": 2020,
+   "count": 300902
+  },
+  {
+   "year": 2021,
+   "count": 347955
+  },
+  {
+   "year": 2022,
+   "count": 355769
+  },
+  {
+   "year": 2023,
+   "count": 338809
+  },
+  {
+   "year": 2024,
+   "count": 343731
+  }
+ ]
+}

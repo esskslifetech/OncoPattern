@@ -1,0 +1,158 @@
+# ============================================================================
+# oncopattern/simulation/params.tech — parameter sets per cancer type.
+#
+# Every simulation model reads its constants from here, indexed by cancer
+# type, so a whole run is reproducible from one integer.  Values are
+# order-of-magnitude realistic for the named entity and are documented with
+# their units; they are simulation defaults, not clinical recommendations.
+#
+# META @module(name:sim_params, provides:sim_params, requires:constants)
+# ============================================================================
+
+IMPORT oncopattern/core/constants
+
+DECL CT_LUAD : int<64> = 0      # lung adenocarcinoma
+DECL CT_BRCA : int<64> = 1      # breast carcinoma
+DECL CT_COAD : int<64> = 2      # colorectal adenocarcinoma
+DECL CT_GBM  : int<64> = 3      # glioblastoma
+DECL CT_N    : int<64> = 4
+
+# ---- growth: dN/dt = r N (1 - N/K)     r [1/day], K [cells], N0 [cells]
+DECL p_growth_r  : buf<8, float<64>> = null
+DECL p_growth_K  : buf<8, float<64>> = null
+DECL p_growth_N0 : buf<8, float<64>> = null
+# ---- diffusion: D [cm2/s scaled to grid], lambda [1/s consumption]
+DECL p_diff_D    : buf<8, float<64>> = null
+DECL p_diff_lam  : buf<8, float<64>> = null
+# ---- angiogenesis: VEGF secretion, endothelial chemotactic sensitivity
+DECL p_vegf      : buf<8, float<64>> = null
+DECL p_chi       : buf<8, float<64>> = null
+# ---- PK/PD: ke elimination [1/h], k12/k21 transfer [1/h], EC50 [mg/L]
+DECL p_pk_ke     : buf<8, float<64>> = null
+DECL p_pk_k12    : buf<8, float<64>> = null
+DECL p_pk_k21    : buf<8, float<64>> = null
+DECL p_pd_ec50   : buf<8, float<64>> = null
+# ---- immune (Lotka-Volterra): kill rate, immune recruitment, decay
+DECL p_im_kill   : buf<8, float<64>> = null
+DECL p_im_rec    : buf<8, float<64>> = null
+DECL p_im_decay  : buf<8, float<64>> = null
+# ---- mutation cascade: per-generation driver acquisition probability
+DECL p_mut_p     : buf<8, float<64>> = null
+# ---- tissue: Young's modulus [kPa], thermal conductivity, perfusion
+DECL p_young     : buf<8, float<64>> = null
+DECL p_perf      : buf<8, float<64>> = null
+
+DECL g_ct : int<64> = 0         # the active cancer type
+
+FUNC params_init() {
+    # ---------------------------------------------------------------- LUAD
+    p_growth_r[0]  = 0.030
+    p_growth_K[0]  = 10000000000.0
+    p_growth_N0[0] = 1000000.0
+    p_diff_D[0]    = 0.150
+    p_diff_lam[0]  = 0.090
+    p_vegf[0]      = 0.040
+    p_chi[0]       = 0.060
+    p_pk_ke[0]     = 0.170
+    p_pk_k12[0]    = 0.250
+    p_pk_k21[0]    = 0.120
+    p_pd_ec50[0]   = 3.500
+    p_im_kill[0]   = 0.000000004
+    p_im_rec[0]    = 0.090
+    p_im_decay[0]  = 0.060
+    p_mut_p[0]     = 0.045
+    p_young[0]     = 2.500
+    p_perf[0]      = 0.005
+    # ---------------------------------------------------------------- BRCA
+    p_growth_r[1]  = 0.018
+    p_growth_K[1]  = 8000000000.0
+    p_growth_N0[1] = 500000.0
+    p_diff_D[1]    = 0.130
+    p_diff_lam[1]  = 0.075
+    p_vegf[1]      = 0.030
+    p_chi[1]       = 0.045
+    p_pk_ke[1]     = 0.120
+    p_pk_k12[1]    = 0.200
+    p_pk_k21[1]    = 0.100
+    p_pd_ec50[1]   = 2.800
+    p_im_kill[1]   = 0.000000005
+    p_im_rec[1]    = 0.100
+    p_im_decay[1]  = 0.050
+    p_mut_p[1]     = 0.030
+    p_young[1]     = 3.200
+    p_perf[1]      = 0.004
+    # ---------------------------------------------------------------- COAD
+    p_growth_r[2]  = 0.024
+    p_growth_K[2]  = 9000000000.0
+    p_growth_N0[2] = 2000000.0
+    p_diff_D[2]    = 0.140
+    p_diff_lam[2]  = 0.100
+    p_vegf[2]      = 0.035
+    p_chi[2]       = 0.050
+    p_pk_ke[2]     = 0.150
+    p_pk_k12[2]    = 0.220
+    p_pk_k21[2]    = 0.110
+    p_pd_ec50[2]   = 4.000
+    p_im_kill[2]   = 0.000000004
+    p_im_rec[2]    = 0.085
+    p_im_decay[2]  = 0.055
+    p_mut_p[2]     = 0.050
+    p_young[2]     = 2.000
+    p_perf[2]      = 0.006
+    # ----------------------------------------------------------------- GBM
+    p_growth_r[3]  = 0.055
+    p_growth_K[3]  = 4000000000.0
+    p_growth_N0[3] = 3000000.0
+    p_diff_D[3]    = 0.220          # notoriously diffuse margin
+    p_diff_lam[3]  = 0.140
+    p_vegf[3]      = 0.070
+    p_chi[3]       = 0.090
+    p_pk_ke[3]     = 0.200
+    p_pk_k12[3]    = 0.080          # blood-brain barrier
+    p_pk_k21[3]    = 0.060
+    p_pd_ec50[3]   = 6.000
+    p_im_kill[3]   = 0.000000002
+    p_im_rec[3]    = 0.070
+    p_im_decay[3]  = 0.080
+    p_mut_p[3]     = 0.060
+    p_young[3]     = 1.000
+    p_perf[3]      = 0.008
+}
+
+FUNC params_set_type(ct : int<64>) {
+    g_ct = oc_iclamp(ct, 0, CT_N - 1)
+}
+
+FUNC ct_name(ct : int<64>) : buf<> {
+    MATCH ct {
+        CASE 0 {
+            RETURN strbuf("LUAD (lung adenocarcinoma)")
+        }
+        CASE 1 {
+            RETURN strbuf("BRCA (breast carcinoma)")
+        }
+        CASE 2 {
+            RETURN strbuf("COAD (colorectal adenocarcinoma)")
+        }
+        ELSE {
+            RETURN strbuf("GBM (glioblastoma)")
+        }
+    }
+}
+
+# map a clinical CSV cancer-type string to its id
+FUNC ct_from_text(b : buf<>, from : int<64>, end : int<64>) : int<64> {
+    IF oc_eq(b, from, end, strbuf("LUAD")) == 1 {
+        RETURN CT_LUAD
+    }
+    IF oc_eq(b, from, end, strbuf("BRCA")) == 1 {
+        RETURN CT_BRCA
+    }
+    IF oc_eq(b, from, end, strbuf("COAD")) == 1 {
+        RETURN CT_COAD
+    }
+    IF oc_eq(b, from, end, strbuf("GBM")) == 1 {
+        RETURN CT_GBM
+    }
+    RETURN CT_LUAD
+}
